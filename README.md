@@ -126,50 +126,20 @@ Implementa as funções core de validação:
 
 - **`checkPathTraversal(path string) error`**
   - Helper que detecta padrões perigosos: `..`, `//`, `/.`, `/./`, etc.
-  - Executado em cada componente do caminho separadamente
+  ---
+
+## Segurança
+
+Todos os detalhes sobre validação de segurança, sandbox package e testes estão documentados em [router/SECURITY_TESTS.md](router/SECURITY_TESTS.md).
+
+**Tópicos cobertos:**
+- Validação de nomes de ferramentas
+- Validação de caminhos (path traversal, symlinks)
+- Proteção contra injeção de comando
+- Proteção contra DoS
+- Testes de streaming SSE
 
 ---
-
-## Testes de Segurança (P0 - Crítico)
-
-Os testes de segurança estão localizados em `router/internal/sandbox/` e cobrem as principais vulnerabilidades:
-
-### `sandbox_test.go`
-Valida a função `ValidatePath()` que garante que os caminhos solicitados não escapam do workspace. Testes incluem:
-- **Path Traversal**: Bloqueia `../`, `..\\`, `//`, `/.` (e variações com encoding)
-- **Encoding Bypass**: Detecta `%2e%2e%2f` (URL encoding), `%252e%252e%252f` (duplo encoding), etc.
-- **Symlinks**: Rejeita symlinks absolutos e relativos que escapam do workspace
-- **Symlink Chains**: Detecta cadeias de symlinks maliciosas (ex: `link1 → link2 → ../outside`)
-- **Validação de Nomes**: Testa `ValidateToolName()` com caracteres inválidos (spaces, `/`, `\`, etc.)
-- **Prefix Boundary**: Evita bypasses via colisão de prefixos (ex: `/ws` vs `/ws2`)
-
-### `command_injection_test.go`
-Verifica que comandos são executados com segurança sem interpretação de shell:
-- **Command Separators**: Testa que `;`, `|`, `&&`, `||` não são interpretados como separadores
-- **Shell Features**: Valida que `$()`, backticks, `$VAR`, redirecionamentos (`>`, `<`, `>>`) são tratados como literais
-- **Quote Bypass**: Verifica que aspas não escapam do contexto da string
-- Usa `exec.Command` (sem shell), garantindo que argumentos nunca são interpretados
-
-### `dos_test.go`
-Protege contra ataques de negação de serviço:
-- **Body Size Limits**: Rejeita requests com corpo maior que 1MB
-- **Context Timeouts**: Valida timeouts em requisições HTTP e execução de tools
-- **SSE Streaming**: Testa limites de buffer (4MB por linha) para evitar consumo infinito de memória
-- **Connection Limits**: Verifica que múltiplas conexões simultâneas são limitadas
-
-### `integration_test.go`
-Testa a integração dos validadores com as rotas HTTP:
-- **Tool Name Validation**: Verifica que tool names inválidos são rejeitados na rota `/mcp/<tool>`
-- **HTTP Path Traversal**: Testa que path traversal em query parameters é bloqueado
-- **Error Responses**: Valida que erros de validação retornam status HTTP correto (400 Bad Request)
-- **Allowlist Enforcement**: Confirma que apenas tools registrados em config.yaml são acessíveis
-
-### `sse_test.go`
-Valida o comportamento de streaming SSE (Server-Sent Events) e detecção de desconexão:
-- **Client Disconnect**: Testa que o servidor detecta quando um cliente SSE se desconecta
-- **Context Cancellation**: Verifica que o `context.Context` é cancelado imediatamente após desconexão
-- **Resource Cleanup**: Garante que resources não vazam quando um cliente abandona a conexão
-- **DoS Prevention**: Evita que clientes maliciosos façam múltiplas conexões rápidas para esgotar recursos
 
 ## Bridge HTTP/SSE ↔ STDIO
 
