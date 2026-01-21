@@ -196,24 +196,43 @@ func runLauncher(
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
-	for scanner.Scan() {
+	// Canaliza linhas e erros para conseguir interromper imediatamente no ctx.Done().
+	lines := make(chan []byte, 8)
+	scanErr := make(chan error, 1)
+
+	go func() {
+		defer close(lines)
+
+		for scanner.Scan() {
+			// Copia o buffer do scanner, porque scanner.Bytes() muda a cada Scan()
+			b := append([]byte(nil), scanner.Bytes()...)
+			lines <- b
+		}
+		// scanner terminou: registra erro (ou nil)
+		scanErr <- scanner.Err()
+	}()
+
+	for {
 		select {
 		case <-ctx.Done():
+			// Cliente desconectou / timeout da tool: mata o processo via defer proc.Close()
 			return ctx.Err()
-		default:
+
+		case line, ok := <-lines:
+			if !ok {
+				// Acabou o scan: pega erro do scanner e depois espera o processo
+				if err := <-scanErr; err != nil {
+					return err
+				}
+				return proc.Wait()
+			}
+
+			sendRawSSE(w, "message", line)
+			flusher.Flush()
 		}
-
-		line := scanner.Bytes()
-		sendRawSSE(w, "message", line)
-		flusher.Flush()
 	}
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-
-	return proc.Wait()
 }
+
 
 func sendSSE(w http.ResponseWriter, event string, payload any) {
 	data, _ := json.Marshal(payload)
