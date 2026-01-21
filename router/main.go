@@ -162,7 +162,7 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	err = runLauncher(ctx, toolName, tool, body, w, flusher)
 	if err != nil {
-		sendSSE(w, "error", map[string]string{"error": err.Error()})
+		_ = sendSSE(w, "error", map[string]string{"error": err.Error()})
 		flusher.Flush()
 	}
 }
@@ -227,19 +227,27 @@ func runLauncher(
 				return proc.Wait()
 			}
 
-			sendRawSSE(w, "message", line)
-			flusher.Flush()
+		if err := sendRawSSE(w, "message", line); err != nil {
+			return err
+		}
+		flusher.Flush()
 		}
 	}
 }
 
 
-func sendSSE(w http.ResponseWriter, event string, payload any) {
+func sendSSE(w http.ResponseWriter, event string, payload any) error {
 	data, _ := json.Marshal(payload)
-	sendRawSSE(w, event, data)
+	return sendRawSSE(w, event, data)
 }
 
-func sendRawSSE(w http.ResponseWriter, event string, data []byte) {
-	fmt.Fprintf(w, "event: %s\n", event)
-	fmt.Fprintf(w, "data: %s\n\n", bytes.TrimSpace(data))
+
+func sendRawSSE(w http.ResponseWriter, event string, data []byte) error {
+	_, err := fmt.Fprintf(w, "event: %s\n", event)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", bytes.TrimSpace(data))
+	return err
 }
+
