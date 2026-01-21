@@ -16,24 +16,28 @@ func New(cfg *config.Config) *Runner {
 	return &Runner{cfg: cfg}
 }
 
-func (r *Runner) Start(ctx context.Context, tool config.Tool) (Process, error) {
+func (r *Runner) Start(ctx context.Context, toolName string, tool config.Tool) (Process, error) {
 	rt, err := runtime.FromTool(tool)
 	if err != nil {
 		return nil, err
 	}
 
-	cmd, stdin, stdout, err := rt.Spawn(ctx, r.cfg, tool)
+	cmd, stdin, stdout, stderr, err := rt.Spawn(ctx, r.cfg, tool)
 	if err != nil {
 		return nil, err
 	}
 
 	p := &execProcess{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: stdout,
-		closer: func() { runtime.KillProcess(cmd) },
-		waiter: func() error { return cmd.Wait() },
+		toolName: toolName,
+		stdin:    stdin,
+		stdout:   stdout,
+		stderr:   stderr,
+		closeFn:  func() { runtime.KillProcess(cmd) },
+		waitFn:   func() error { return cmd.Wait() },
 	}
+
+	// stderr pump é “owned” pelo process; termina com ctx/process
+	p.startStderrPump(ctx)
 
 	return p, nil
 }

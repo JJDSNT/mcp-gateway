@@ -1,10 +1,8 @@
 package runtime
 
 import (
-	"bufio"
 	"context"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 
@@ -13,7 +11,7 @@ import (
 
 type NativeRuntime struct{}
 
-func (NativeRuntime) Spawn(ctx context.Context, cfg *config.Config, tool config.Tool) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
+func (NativeRuntime) Spawn(ctx context.Context, cfg *config.Config, tool config.Tool) (*exec.Cmd, io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
 	env := append(os.Environ(),
 		"WORKSPACE_ROOT="+cfg.WorkspaceRoot,
 		"TOOLS_ROOT="+cfg.ToolsRoot,
@@ -24,27 +22,22 @@ func (NativeRuntime) Spawn(ctx context.Context, cfg *config.Config, tool config.
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
-	stderr, _ := cmd.StderrPipe()
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
-	// log stderr
-	go func() {
-		sc := bufio.NewScanner(stderr)
-		for sc.Scan() {
-			log.Printf("[tool stderr] %s", sc.Text())
-		}
-	}()
-
-	return cmd, stdin, stdout, nil
+	return cmd, stdin, stdout, stderr, nil
 }

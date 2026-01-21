@@ -10,7 +10,8 @@ import (
 )
 
 type Runtime interface {
-	Spawn(ctx context.Context, cfg *config.Config, tool config.Tool) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error)
+	Spawn(ctx context.Context, cfg *config.Config, tool config.Tool) (*exec.Cmd, io.WriteCloser, io.ReadCloser, io.ReadCloser, error)
+	//                                             cmd      stdin          stdout         stderr
 }
 
 func FromTool(tool config.Tool) (Runtime, error) {
