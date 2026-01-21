@@ -156,7 +156,79 @@ go test ./internal/sandbox -run TestSSE -v
 
 ---
 
-## Running All Tests
+## Priority 1 (P1) - HTTP Hardening & Correctness
+
+### `http_hardening_test.go`
+
+Valida comportamento correto de métodos HTTP e Content-Type.
+
+**Testes incluem:**
+
+- **HTTP Methods**: Apenas GET/POST permitidos; PUT/DELETE/PATCH/TRACE → 405 Method Not Allowed
+- **Content-Type Validation**: POST com JSON válido, outros tipos → 415 Unsupported Media Type
+- **Missing Content-Type**: POST sem Content-Type deve ser rejeitado
+- **Header Validation**: Headers suspeitos são ignorados (não causam erro ou bypass)
+
+**Executar:**
+
+```bash
+go test ./internal/sandbox -run HTTP -v
+```
+
+### `sse_headers_and_flush_test.go`
+
+Valida que SSE headers e flush funcionam corretamente para streaming real.
+
+**Testes incluem:**
+
+- **Required Headers**: Content-Type, Cache-Control, Connection, X-Accel-Buffering
+- **Content-Type Exato**: Deve ser `text/event-stream` (não `application/json`, etc)
+- **Cache-Control no-cache**: Obrigatório para evitar cache em proxies
+- **X-Accel-Buffering no**: Evita buffer em Nginx/Caddy
+- **Flusher Interface**: ResponseWriter deve implementar http.Flusher
+- **Connection keep-alive**: Permite múltiplos eventos na mesma conexão
+
+**Executar:**
+
+```bash
+go test ./internal/sandbox -run SSE -v
+```
+
+### `sse_disconnect_kills_tool_test.go`
+
+Valida que quando cliente SSE desconecta, o contexto é cancelado e o processo da tool é morto.
+
+**Testes incluem:**
+
+- **Context Cancellation**: Quando cliente desconecta, `ctx.Done()` é acionado
+- **Disconnect During Streaming**: Desconexão no meio do stream não causa leak
+- **Process Lifecycle**: Tool process recebe sinal para terminar (via context)
+- **Resource Cleanup**: Nenhum goroutine fica preso após desconexão
+
+**Executar:**
+
+```bash
+go test ./internal/sandbox -run SSEDisconnect -v
+```
+
+### `auth_header_regression_test.go`
+
+Testa-regressão: garante que headers de auth/proxy não causam bypass de validação.
+
+**Testes incluem:**
+
+- **Auth Headers Don't Bypass**: `X-Auth`, `Authorization`, etc não mudam resultado
+- **Proxy Headers Ignored**: `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Real-IP` não afetam validação
+- **Cloudflare Headers Ignored**: `CF-Access-Authenticated`, `CF-Ray`, etc não causam bypass
+- **Same Response With/Without Auth**: Mesmas validações, com ou sem headers presentes
+
+**Executar:**
+
+```bash
+go test ./internal/sandbox -run Auth -v
+```
+
+---
 
 ```bash
 cd router
