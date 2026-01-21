@@ -137,7 +137,7 @@ func ValidatePath(workspaceRoot, requestedPath string) (string, error) {
 				}
 				// Checar novamente o caminho final
 				currentPath = filepath.Clean(currentPath)
-				inWorkspace := currentPath == wsRoot || (strings.HasPrefix(currentPath, wsRoot+string(filepath.Separator)))
+				inWorkspace = currentPath == wsRoot || (strings.HasPrefix(currentPath, wsRoot+string(filepath.Separator)))
 				if !inWorkspace {
 					return "", fmt.Errorf("symlink escapes workspace after resolution")
 				}
