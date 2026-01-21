@@ -1,0 +1,52 @@
+
+services:
+  caddy:
+    image: caddy:2
+    container_name: mcp-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - mcp-router
+    restart: unless-stopped
+
+  mcp-router:
+    build: ./router
+    container_name: mcp-router
+    expose:
+      - "8080"
+    volumes:
+      # Config do gateway
+      - ./config:/config:ro
+
+      # Native tools (scripts/binários)
+      - ./tools:/tools:ro
+
+      # Workspaces (projetos)
+      - ./workspaces:/workspaces:rw
+
+      # Required for Container Runtime (docker run)
+      # ⚠️ Docker socket => privilégio alto (ver README)
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=America/Sao_Paulo
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: mcp-tunnel
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - caddy
+    restart: unless-stopped
+    profiles: ["tunnel"]
+
+volumes:
+  caddy_data:
+  caddy_config:

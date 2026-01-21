@@ -1,0 +1,25 @@
+# config/config.yaml
+workspace_root: /workspaces
+tools_root: /tools
+
+tools:
+  # Script local (validação rápida do bridge)
+  echo:
+    runtime: native
+    mode: launcher
+    cmd: "python3"
+    args: ["/tools/echo.py"]
+
+  # Filesystem via container (isolamento + catálogo)
+  fs:
+    runtime: container
+    mode: launcher
+    image: "mcp/filesystem"
+    args: ["/workspaces"]
+
+  # Git via native (exemplo usando npx; troque se preferir container)
+  git:
+    runtime: native
+    mode: launcher
+    cmd: "npx"
+    args: ["-y", "@modelcontextprotocol/server-git", "/workspaces"]
