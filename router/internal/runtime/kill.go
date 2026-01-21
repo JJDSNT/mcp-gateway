@@ -9,41 +9,22 @@ import (
 )
 
 // KillProcess encerra um *exec.Cmd de forma best-effort.
-// 1) tenta um shutdown "graceful" quando possível
-// 2) depois força kill se necessário
-//
-// Observação: isso é usado pelo runner para cleanup quando o request/context encerra.
+// Importante: NÃO chama Wait() aqui para evitar corrida/double-wait com cmd.Wait()
+// que já é chamado no fluxo normal do router.
 func KillProcess(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
 
-	// Primeiro tenta um encerramento mais suave no Unix.
-	// Em Windows, Signals são diferentes; vamos direto para Kill().
+	// Tenta graceful no Unix.
 	if runtime.GOOS != "windows" {
 		_ = cmd.Process.Signal(syscall.SIGTERM)
-
-		// Dá um tempo curto para o processo sair sozinho.
-		done := make(chan struct{}, 1)
-		go func() {
-			_, _ = cmd.Process.Wait()
-			done <- struct{}{}
-		}()
-
-		select {
-		case <-done:
-			return
-		case <-time.After(500 * time.Millisecond):
-			// continua para kill forçado
-		}
+		// Pequena janela para o processo reagir (ex: escrever marker e sair)
+		time.Sleep(300 * time.Millisecond)
 	}
 
-	// Força encerramento.
+	// Força encerramento (best-effort)
 	_ = cmd.Process.Kill()
-
-	// Best-effort: aguarda coleta do processo para evitar zombie (Unix).
-	// Se já foi waitado em outro lugar, isso pode falhar; ignoramos.
-	_, _ = cmd.Process.Wait()
 }
 
 // (Opcional) KillOSProcess existe caso você precise matar um *os.Process no futuro.

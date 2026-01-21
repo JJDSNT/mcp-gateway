@@ -2,7 +2,11 @@
 
 ## Overview
 
-Os testes de segurança estão localizados em `internal/sandbox/` e cobrem as principais vulnerabilidades (P0 - Crítico).
+Documentação de testes de segurança (P0 - Crítico, P1 - Hardening).
+
+**Para documentação completa de TODOS os testes (incluindo runtime), veja [TESTS.md](TESTS.md).**
+
+---
 
 Execute todos os testes com:
 

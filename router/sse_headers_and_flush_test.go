@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -41,17 +43,26 @@ func toolHelperMain() {
 		os.Exit(0)
 
 	case "__mcp_tool_disconnect_helper__":
-		// Escreve marker ao sair, para o teste saber que o processo morreu.
+		// Para o teste, precisamos escrever um marker quando o processo for encerrado.
+		// Importante: defer NÃO é confiável em SIGKILL; por isso capturamos SIGTERM/INT.
 		marker := os.Getenv("MCP_TOOL_EXIT_MARKER")
-		if marker != "" {
-			defer func() {
-				_ = os.WriteFile(marker, []byte("exited"), 0o644)
-			}()
-		}
 
-		// Emite "ready" e depois fica rodando até ser morto (ctx cancel / kill).
+		sigCh := make(chan os.Signal, 2)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+		// Emite "ready" e depois fica rodando até ser morto.
 		fmt.Println("ready")
+
 		for i := 0; i < 1000000; i++ {
+			select {
+			case <-sigCh:
+				if marker != "" {
+					_ = os.WriteFile(marker, []byte("exited"), 0o644)
+				}
+				os.Exit(0)
+			default:
+			}
+
 			fmt.Printf("tick-%d\n", i)
 			time.Sleep(50 * time.Millisecond)
 		}
