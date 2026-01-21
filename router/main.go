@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -83,6 +84,32 @@ func main() {
 }
 
 func handleMCP(w http.ResponseWriter, r *http.Request) {
+	
+	// P1: hardening de métodos
+    switch r.Method {
+    case http.MethodGet, http.MethodPost:
+        // ok
+    default:
+        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    // P1: validar Content-Type quando aplicável (POST com JSON)
+    if r.Method == http.MethodPost {
+        ct := r.Header.Get("Content-Type")
+        if ct == "" {
+            http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+            return
+        }
+
+        mediaType, _, err := mime.ParseMediaType(ct)
+        if err != nil || mediaType != "application/json" {
+            http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+            return
+        }
+    }
+
+	
 	toolName := strings.TrimPrefix(r.URL.Path, "/mcp/")
 	toolName = strings.Trim(toolName, "/")
 
@@ -117,6 +144,7 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("X-MCP-Tool", toolName)
 	w.Header().Set("X-MCP-Runtime", tool.Runtime)
 
