@@ -3,23 +3,23 @@ workspace_root: /workspaces
 tools_root: /tools
 
 tools:
-  # Script local (validação rápida do bridge)
   echo:
     runtime: native
     mode: launcher
     cmd: "python3"
     args: ["/tools/echo.py"]
+    timeout_ms: 5000
 
-  # Filesystem via container (isolamento + catálogo)
   fs:
     runtime: container
     mode: launcher
     image: "mcp/filesystem"
     args: ["/workspaces"]
+    timeout_ms: 30000
 
-  # Git via native (exemplo usando npx; troque se preferir container)
   git:
     runtime: native
     mode: launcher
     cmd: "npx"
     args: ["-y", "@modelcontextprotocol/server-git", "/workspaces"]
+    timeout_ms: 60000

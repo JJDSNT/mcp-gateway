@@ -3,9 +3,12 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+const DefaultToolTimeout = 30 * time.Second
 
 type Tool struct {
 	Runtime string   `yaml:"runtime"` // native | container
@@ -13,6 +16,8 @@ type Tool struct {
 	Cmd     string   `yaml:"cmd"`
 	Image   string   `yaml:"image"`
 	Args    []string `yaml:"args"`
+
+	TimeoutMS int `yaml:"timeout_ms"` // opcional; se 0 usa default
 }
 
 type Config struct {
@@ -69,7 +74,18 @@ func (c *Config) Validate() error {
 		if t.Mode != "" && t.Mode != "launcher" && t.Mode != "daemon" {
 			return fmt.Errorf("config: tools[%s].mode must be launcher or daemon", name)
 		}
+
+		if t.TimeoutMS < 0 {
+			return fmt.Errorf("config: tools[%s].timeout_ms must be >= 0", name)
+		}
 	}
 
 	return nil
+}
+
+func (t Tool) Timeout() time.Duration {
+	if t.TimeoutMS <= 0 {
+		return DefaultToolTimeout
+	}
+	return time.Duration(t.TimeoutMS) * time.Millisecond
 }
