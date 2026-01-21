@@ -16,10 +16,13 @@ import (
 )
 
 // TestMain: permite que o próprio binário de teste funcione como "tool" (processo).
-// O runtime native vai executar os.Args[0] com args "__mcp_tool_helper__".
-// Como o runtime herda os.Environ(), setamos MCP_ROUTER_TEST_TOOL=1 no teste.
+// O runtime native vai executar os.Args[0] com args:
+// - "__mcp_tool_helper__" (flush test)
+// - "__mcp_tool_disconnect_helper__" (disconnect test)
+//
+// Como o runtime herda os.Environ(), setamos MCP_ROUTER_TEST_TOOL=1 nos testes.
 func TestMain(m *testing.M) {
-	if os.Getenv("MCP_ROUTER_TEST_TOOL") == "1" && len(os.Args) > 1 && os.Args[1] == "__mcp_tool_helper__" {
+	if os.Getenv("MCP_ROUTER_TEST_TOOL") == "1" && len(os.Args) > 1 {
 		toolHelperMain()
 		return
 	}
@@ -27,20 +30,44 @@ func TestMain(m *testing.M) {
 }
 
 func toolHelperMain() {
-	// Emite duas linhas com delay, para provar que o router flushou a primeira
-	// antes do processo terminar.
-	fmt.Println("first")
-	time.Sleep(500 * time.Millisecond)
-	fmt.Println("second")
-	os.Exit(0)
+	// Decide o modo pelo argv[1]
+	switch os.Args[1] {
+	case "__mcp_tool_helper__":
+		// Emite duas linhas com delay, para provar que o router flushou a primeira
+		// antes do processo terminar.
+		fmt.Println("first")
+		time.Sleep(500 * time.Millisecond)
+		fmt.Println("second")
+		os.Exit(0)
+
+	case "__mcp_tool_disconnect_helper__":
+		// Escreve marker ao sair, para o teste saber que o processo morreu.
+		marker := os.Getenv("MCP_TOOL_EXIT_MARKER")
+		if marker != "" {
+			defer func() {
+				_ = os.WriteFile(marker, []byte("exited"), 0o644)
+			}()
+		}
+
+		// Emite "ready" e depois fica rodando até ser morto (ctx cancel / kill).
+		fmt.Println("ready")
+		for i := 0; i < 1000000; i++ {
+			fmt.Printf("tick-%d\n", i)
+			time.Sleep(50 * time.Millisecond)
+		}
+		os.Exit(0)
+
+	default:
+		fmt.Fprintln(os.Stderr, "unknown helper mode:", os.Args[1])
+		os.Exit(2)
+	}
 }
 
 func setTestConfigAndRunnerForSSE(t *testing.T) {
 	t.Helper()
 
 	// Tool nativa que executa o próprio binário de teste como helper process.
-	// Observação: assumimos que config.Tool possui esses campos (Runtime/Cmd/Args).
-	// Isso bate com o seu NativeRuntime (tool.Cmd, tool.Args...) e com o YAML típico.
+	// Isso bate com seu NativeRuntime (tool.Cmd, tool.Args...).
 	cfg = &config.Config{
 		WorkspaceRoot: "/tmp/workspaces",
 		ToolsRoot:     "/tmp/tools",
@@ -49,7 +76,6 @@ func setTestConfigAndRunnerForSSE(t *testing.T) {
 				Runtime: "native",
 				Cmd:     os.Args[0],
 				Args:    []string{"__mcp_tool_helper__"},
-				// Timeout: deixamos default do projeto (normalmente > 0)
 			},
 		},
 	}
@@ -105,13 +131,12 @@ func TestSSEHeadersAndFlush_StreamIsIncremental(t *testing.T) {
 		t.Fatalf("X-MCP-Runtime: expected %q, got %q", "native", got)
 	}
 
-	// P1: anti-buffering em proxies (nginx/caddy). Seu main.go AINDA NÃO seta isso:
-	// adicione: w.Header().Set("X-Accel-Buffering", "no")
+	// P1: anti-buffering em proxies (nginx/caddy).
 	if got := resp.Header.Get("X-Accel-Buffering"); got != "no" {
 		t.Fatalf("X-Accel-Buffering: expected %q, got %q", "no", got)
 	}
 
-	// Agora a parte mais importante: provar que o stream chega antes do fim do processo.
+	// Provar que o stream chega antes do fim do processo (flush incremental).
 	// Queremos observar o "data: first" chegando rápido (antes de 250ms).
 	reader := bufio.NewReader(resp.Body)
 
@@ -122,7 +147,6 @@ func TestSSEHeadersAndFlush_StreamIsIncremental(t *testing.T) {
 
 	ch := make(chan readResult, 1)
 	go func() {
-		// Lê linhas até achar "data: first"
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
