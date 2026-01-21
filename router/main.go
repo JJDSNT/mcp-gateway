@@ -9,7 +9,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"router/internal/config"
 	"router/internal/runner"
@@ -17,6 +21,8 @@ import (
 
 var cfg *config.Config
 var run *runner.Runner
+
+const maxRequestBodyBytes = 1 << 20 // 1MB
 
 func main() {
 	var err error
@@ -32,10 +38,47 @@ func main() {
 		log.Println(" -", k)
 	}
 
-	http.HandleFunc("/mcp/", handleMCP)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mcp/", handleMCP)
 
-	log.Println("MCP Router listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	srv := &http.Server{
+		Addr:              ":8080",
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      0,                // SSE
+		IdleTimeout:       60 * time.Second, // keep-alive
+	}
+
+	// Shutdown gracioso
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Println("MCP Router listening on :8080")
+		errCh <- srv.ListenAndServe()
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Println("shutdown signal received")
+	case err := <-errCh:
+		// se o server cair por outro motivo
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("http shutdown error: %v", err)
+	} else {
+		log.Println("http server stopped")
+	}
 }
 
 func handleMCP(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +90,8 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown tool", http.StatusNotFound)
 		return
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -73,41 +118,44 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	// timeout por tool
+	ctx, cancel := context.WithTimeout(r.Context(), tool.Timeout())
+	defer cancel()
 
-	log.Printf("request tool=%s runtime=%s", toolName, tool.Runtime)
+	log.Printf("request tool=%s runtime=%s timeout=%s", toolName, tool.Runtime, tool.Timeout())
 
-	err = runLauncher(ctx, tool, body, w, flusher)
+	err = runLauncher(ctx, toolName, tool, body, w, flusher)
 	if err != nil {
-		sendSSE(w, "error", map[string]string{
-			"error": err.Error(),
-		})
+		sendSSE(w, "error", map[string]string{"error": err.Error()})
 		flusher.Flush()
 	}
 }
 
 func runLauncher(
 	ctx context.Context,
+	toolName string,
 	tool config.Tool,
 	payload []byte,
 	w http.ResponseWriter,
 	flusher http.Flusher,
 ) error {
-	proc, err := run.Start(ctx, tool)
+	proc, err := run.Start(ctx, toolName, tool)
 	if err != nil {
 		return err
 	}
 	defer proc.Close()
 
-	// send request
 	stdin := proc.Stdin()
 	_, err = stdin.Write(append(payload, '\n'))
 	if err != nil {
 		return err
 	}
-	stdin.Close()
 
-	// stream stdout to SSE
+	if err := stdin.Close(); err != nil {
+		// não falha request por isso; só loga
+		log.Printf("[tool=%s] stdin close error: %v", toolName, err)
+	}
+
 	stdout := proc.Stdout()
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -122,6 +170,10 @@ func runLauncher(
 		line := scanner.Bytes()
 		sendRawSSE(w, "message", line)
 		flusher.Flush()
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
 	}
 
 	return proc.Wait()
