@@ -6,7 +6,7 @@ import (
 	"io"
 	"os/exec"
 
-	"router/internal/config"
+	"mcp-router/internal/config"
 )
 
 type Runtime interface {

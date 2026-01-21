@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 
-	"router/internal/config"
+	"mcp-router/internal/config"
 )
 
 type DockerRuntime struct{}

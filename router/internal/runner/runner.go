@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"router/internal/config"
-	"router/internal/runtime"
+	"mcp-router/internal/config"
+	"mcp-router/internal/runtime"
 )
 
 type Runner struct {

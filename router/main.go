@@ -15,8 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"router/internal/config"
-	"router/internal/runner"
+	"mcp-router/internal/config"
+	"mcp-router/internal/runner"
+	"mcp-router/internal/sandbox"
 )
 
 var cfg *config.Config
@@ -84,6 +85,13 @@ func main() {
 func handleMCP(w http.ResponseWriter, r *http.Request) {
 	toolName := strings.TrimPrefix(r.URL.Path, "/mcp/")
 	toolName = strings.Trim(toolName, "/")
+
+	// Validar tool name (P0: bloqueia caracteres suspeitos)
+	if err := sandbox.ValidateToolName(toolName); err != nil {
+		log.Printf("invalid tool name %q: %v", toolName, err)
+		http.Error(w, "invalid tool name", http.StatusBadRequest)
+		return
+	}
 
 	tool, ok := cfg.Tools[toolName]
 	if !ok {
