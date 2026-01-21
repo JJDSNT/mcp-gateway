@@ -283,3 +283,62 @@ func TestValidatePath_RejectsSymlinkEscapeEvenIfTargetDoesNotExist(t *testing.T)
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestValidatePath_RejectsRelativeSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "ws")
+	outside := filepath.Join(root, "outside")
+
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatalf("mkdir ws: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+
+	// ws/a/link -> ../../outside
+	a := filepath.Join(ws, "a")
+	if err := os.MkdirAll(a, 0o755); err != nil {
+		t.Fatalf("mkdir a: %v", err)
+	}
+
+	link := filepath.Join(a, "link")
+	if err := os.Symlink(filepath.Join("..", "..", "outside"), link); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	_, err := ValidatePath(ws, "a/link/secret.txt")
+	if err == nil {
+		t.Fatalf("expected error (relative symlink escape), got nil")
+	}
+}
+
+func TestValidatePath_RejectsSymlinkChainEscape(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "ws")
+	outside := filepath.Join(root, "outside")
+
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatalf("mkdir ws: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+
+	// ws/link2 -> ../outside
+	link2 := filepath.Join(ws, "link2")
+	if err := os.Symlink(filepath.Join("..", "outside"), link2); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	// ws/link1 -> link2
+	link1 := filepath.Join(ws, "link1")
+	if err := os.Symlink("link2", link1); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	_, err := ValidatePath(ws, "link1/secret.txt")
+	if err == nil {
+		t.Fatalf("expected error (symlink chain escape), got nil")
+	}
+}
