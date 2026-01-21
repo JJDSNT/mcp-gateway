@@ -1,4 +1,3 @@
-// router/main.go
 package main
 
 import (
@@ -10,52 +9,33 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"router/internal/config"
+	"router/internal/runner"
 )
 
-type Tool struct {
-	Runtime string   `yaml:"runtime"` // native | container
-	Mode    string   `yaml:"mode"`    // launcher | daemon (daemon reservado)
-	Cmd     string   `yaml:"cmd"`
-	Image   string   `yaml:"image"`
-	Args    []string `yaml:"args"`
-}
-
-type Config struct {
-	WorkspaceRoot string          `yaml:"workspace_root"`
-	ToolsRoot     string          `yaml:"tools_root"`
-	Tools         map[string]Tool `yaml:"tools"`
-}
-
-var cfg Config
+var cfg *config.Config
+var run *runner.Runner
 
 func main() {
-	loadConfig()
-
-	http.HandleFunc("/mcp/", handleMCP)
-
-	log.Println("MCP Router listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
-
-func loadConfig() {
-	data, err := os.ReadFile("/config/config.yaml")
+	var err error
+	cfg, err = config.LoadFromFile("/config/config.yaml")
 	if err != nil {
-		log.Fatal("cannot read config.yaml:", err)
+		log.Fatal(err)
 	}
 
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		log.Fatal("invalid config.yaml:", err)
-	}
+	run = runner.New(cfg)
 
 	log.Println("Loaded tools:")
 	for k := range cfg.Tools {
 		log.Println(" -", k)
 	}
+
+	http.HandleFunc("/mcp/", handleMCP)
+
+	log.Println("MCP Router listening on :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func handleMCP(w http.ResponseWriter, r *http.Request) {
@@ -64,20 +44,19 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	tool, ok := cfg.Tools[toolName]
 	if !ok {
-		http.Error(w, "unknown tool", 404)
+		http.Error(w, "unknown tool", http.StatusNotFound)
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "invalid body", 400)
+		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
 
 	body = bytes.TrimSpace(body)
-
 	if !json.Valid(body) {
-		http.Error(w, "body must be valid JSON", 400)
+		http.Error(w, "body must be valid JSON", http.StatusBadRequest)
 		return
 	}
 
@@ -85,13 +64,12 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-
 	w.Header().Set("X-MCP-Tool", toolName)
 	w.Header().Set("X-MCP-Runtime", tool.Runtime)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming unsupported", 500)
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
 
@@ -108,23 +86,29 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runLauncher(ctx context.Context, tool Tool, payload []byte, w http.ResponseWriter, flusher http.Flusher) error {
-	cmd, stdin, stdout, err := spawnTool(ctx, tool)
+func runLauncher(
+	ctx context.Context,
+	tool config.Tool,
+	payload []byte,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+) error {
+	proc, err := run.Start(ctx, tool)
 	if err != nil {
 		return err
 	}
-
-	defer killProcess(cmd)
+	defer proc.Close()
 
 	// send request
+	stdin := proc.Stdin()
 	_, err = stdin.Write(append(payload, '\n'))
 	if err != nil {
 		return err
 	}
-
 	stdin.Close()
 
 	// stream stdout to SSE
+	stdout := proc.Stdout()
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -140,73 +124,7 @@ func runLauncher(ctx context.Context, tool Tool, payload []byte, w http.Response
 		flusher.Flush()
 	}
 
-	return cmd.Wait()
-}
-
-func spawnTool(ctx context.Context, tool Tool) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
-
-	env := append(os.Environ(),
-		"WORKSPACE_ROOT="+cfg.WorkspaceRoot,
-		"TOOLS_ROOT="+cfg.ToolsRoot,
-	)
-
-	var cmd *exec.Cmd
-
-	// Native Runtime
-	if tool.Runtime == "native" {
-		cmd = exec.CommandContext(ctx, tool.Cmd, tool.Args...)
-		cmd.Env = env
-	}
-
-	// Container Runtime
-	if tool.Runtime == "container" {
-		args := []string{
-			"run", "-i", "--rm",
-			"-v", fmt.Sprintf("%s:/workspaces", cfg.WorkspaceRoot),
-			tool.Image,
-		}
-		args = append(args, tool.Args...)
-
-		cmd = exec.CommandContext(ctx, "docker", args...)
-		cmd.Env = env
-	}
-
-	if cmd == nil {
-		return nil, nil, nil, fmt.Errorf("invalid runtime: %s", tool.Runtime)
-	}
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	stderr, _ := cmd.StderrPipe()
-
-	if err := cmd.Start(); err != nil {
-		return nil, nil, nil, err
-	}
-
-	// log stderr
-	go func() {
-		sc := bufio.NewScanner(stderr)
-		for sc.Scan() {
-			log.Printf("[tool stderr] %s", sc.Text())
-		}
-	}()
-
-	return cmd, stdin, stdout, nil
-}
-
-func killProcess(cmd *exec.Cmd) {
-	if cmd.Process != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
-	}
+	return proc.Wait()
 }
 
 func sendSSE(w http.ResponseWriter, event string, payload any) {
