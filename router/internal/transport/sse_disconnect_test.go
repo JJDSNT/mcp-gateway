@@ -8,9 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -18,37 +16,6 @@ import (
 	"mcp-router/internal/core"
 	"mcp-router/internal/transport"
 )
-
-func TestMain(m *testing.M) {
-	// Quando o teste invoca o próprio binário como "tool", cai aqui.
-	if os.Getenv("MCP_GW_TEST_TOOL") == "1" && len(os.Args) > 1 {
-		toolHelperMain()
-		return
-	}
-	os.Exit(m.Run())
-}
-
-func toolHelperMain() {
-	switch os.Args[1] {
-	case "__mcp_tool_disconnect_helper__":
-		marker := os.Getenv("MCP_TOOL_EXIT_MARKER")
-
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
-		// Notifica o router que a tool iniciou (uma linha qualquer no stdout).
-		// Pode ser JSON ou texto — o HTTP transport vai embrulhar em SSE.
-		fmt.Println(`{"ready":true}`)
-
-		<-sigCh // espera o SIGTERM enviado pelo KillProcess / cancelamento
-
-		if marker != "" {
-			// Cria marker no disco pra prova de que o processo saiu
-			_ = os.WriteFile(marker, []byte("exited"), 0644)
-		}
-		os.Exit(0)
-	}
-}
 
 func TestSSEDisconnect_KillsToolProcess(t *testing.T) {
 	marker := t.TempDir() + "/tool_exited.marker"

@@ -11,7 +11,7 @@ import (
 	"mcp-router/internal/transport"
 )
 
-func newTestMux(t *testing.T) *http.ServeMux {
+func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 
 	cfg := &config.Config{
@@ -28,18 +28,21 @@ func newTestMux(t *testing.T) *http.ServeMux {
 
 	mux := http.NewServeMux()
 	httpT.Register(mux)
-	return mux
+
+	// IMPORTANT: em produção, o HTTP.Run usa WrapHardening(mux).
+	// Se o teste usar mux direto, o ServeMux pode responder 301 antes do nosso código.
+	return transport.WrapHardening(mux)
 }
 
 func TestHTTPMethods_Hardening(t *testing.T) {
-	mux := newTestMux(t)
+	h := newTestHandler(t)
 
 	tests := []struct {
 		method       string
 		expectStatus int
 	}{
-		{http.MethodPost, 0}, // permitido: só verificar != 405
-		{http.MethodGet, http.StatusMethodNotAllowed}, // no handler novo: /mcp/<tool> é POST-only
+		{http.MethodPost, 0},                        // permitido: só verificar != 405
+		{http.MethodGet, http.StatusMethodNotAllowed}, // /mcp/<tool> é POST-only
 
 		{http.MethodPut, http.StatusMethodNotAllowed},
 		{http.MethodDelete, http.StatusMethodNotAllowed},
@@ -57,7 +60,7 @@ func TestHTTPMethods_Hardening(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			mux.ServeHTTP(w, req)
+			h.ServeHTTP(w, req)
 
 			if tt.expectStatus == 0 {
 				if w.Code == http.StatusMethodNotAllowed {
@@ -73,7 +76,7 @@ func TestHTTPMethods_Hardening(t *testing.T) {
 }
 
 func TestContentType_Hardening(t *testing.T) {
-	mux := newTestMux(t)
+	h := newTestHandler(t)
 
 	tests := []struct {
 		name        string
@@ -99,7 +102,7 @@ func TestContentType_Hardening(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			mux.ServeHTTP(w, req)
+			h.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
 				t.Fatalf("content-type %q: expected %d, got %d", tt.contentType, tt.wantStatus, w.Code)
@@ -109,14 +112,14 @@ func TestContentType_Hardening(t *testing.T) {
 }
 
 func TestInvalidToolName_Hardening(t *testing.T) {
-	mux := newTestMux(t)
+	h := newTestHandler(t)
 
-	// toolName inválido: tenta traversal / chars proibidos (depende do seu ValidateToolName)
+	// tentativa clássica de traversal no path; com WrapHardening deve dar 400 (não 301)
 	req := httptest.NewRequest(http.MethodPost, "/mcp/../evil", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	mux.ServeHTTP(w, req)
+	h.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid tool name, got %d", w.Code)

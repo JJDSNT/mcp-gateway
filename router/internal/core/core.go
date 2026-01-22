@@ -10,6 +10,7 @@ import (
 
 	"mcp-router/internal/config"
 	"mcp-router/internal/runner"
+	"mcp-router/internal/sandbox"
 )
 
 type LineWriter interface {
@@ -49,7 +50,14 @@ func (s *Service) ListTools(ctx context.Context) ([]ToolInfo, error) {
 }
 
 // StreamTool executa a tool (launcher), manda 1 input (linha JSON) e streama stdout linha a linha.
+//
+// Importante: este método monitora ctx.Done() e mata o processo ao cancelar (ex.: cliente SSE desconectou).
+// Também valida toolName via sandbox, para que HTTP e stdio compartilhem a mesma regra.
 func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []byte, out LineWriter) error {
+	if err := sandbox.ValidateToolName(toolName); err != nil {
+		return fmt.Errorf("invalid tool name: %w", err)
+	}
+
 	tool, err := s.r.MustGetTool(toolName)
 	if err != nil {
 		return err
@@ -62,6 +70,17 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 	if err != nil {
 		return err
 	}
+
+	// Garante cleanup e também garante kill no cancelamento (cliente desconectou / timeout).
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-tctx.Done():
+			_ = p.Close()
+		case <-done:
+		}
+	}()
+	defer close(done)
 	defer func() { _ = p.Close() }()
 
 	// garante input JSON válido; se vier vazio, manda {}
@@ -82,11 +101,19 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
 	for sc.Scan() {
+		// Se o contexto foi cancelado, finalize cedo.
+		select {
+		case <-tctx.Done():
+			return tctx.Err()
+		default:
+		}
+
 		line := append([]byte(nil), sc.Bytes()...)
 		if len(line) == 0 {
 			continue
 		}
 		if err := out.WriteLine(line); err != nil {
+			// erro ao escrever (ex.: broken pipe no SSE) => caller desconectou
 			return err
 		}
 	}
@@ -102,6 +129,10 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 }
 
 func writeJSONLineAndClose(w io.WriteCloser, b []byte) error {
+	if len(b) == 0 {
+		b = []byte(`{}`)
+	}
+
 	// garante newline
 	if b[len(b)-1] != '\n' {
 		b = append(b, '\n')

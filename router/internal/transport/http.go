@@ -32,13 +32,15 @@ func (h *HTTP) Register(mux *http.ServeMux) {
 }
 
 // Run sobe o servidor HTTP e faz shutdown gracioso quando ctx for cancelado.
+//
+// Importante: o handler do server é embrulhado com hardening (bloqueia dot-segments antes do ServeMux).
 func (h *HTTP) Run(ctx context.Context, addr string) error {
 	mux := http.NewServeMux()
 	h.Register(mux)
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           WrapHardening(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      0,                // SSE
@@ -57,6 +59,36 @@ func (h *HTTP) Run(ctx context.Context, addr string) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// WrapHardening bloqueia paths com dot-segments antes do ServeMux tentar limpar e redirecionar.
+// Isso garante 400 (e não 301) para tentativas como /mcp/../evil.
+func WrapHardening(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Só aplica no namespace /mcp
+		if !strings.HasPrefix(r.URL.Path, "/mcp") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Bloqueia dot-segments no path "decodificado"
+		p := r.URL.Path
+		if strings.Contains(p, "/../") || strings.HasSuffix(p, "/..") ||
+			strings.Contains(p, "/./") || strings.HasSuffix(p, "/.") {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+
+		// Bloqueia também tentativas URL-encoded (escaped path)
+		ep := strings.ToLower(r.URL.EscapedPath())
+		// cobre %2e%2e%2f, %2e%2e/, %2e/ etc
+		if strings.Contains(ep, "%2e%2e") || strings.Contains(ep, "%2e/") || strings.Contains(ep, "/%2e") {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (h *HTTP) handleTools(w http.ResponseWriter, r *http.Request) {
