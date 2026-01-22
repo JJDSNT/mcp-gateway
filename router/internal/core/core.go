@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"mcp-router/internal/config"
@@ -22,12 +23,17 @@ type LineWriter interface {
 type Service struct {
 	cfg *config.Config
 	r   *runner.Runner
+
+	// Limite de concorrência por tool (Prioridade 1.2)
+	semMu sync.Mutex
+	sem   map[string]chan struct{}
 }
 
 func New(cfg *config.Config) *Service {
 	return &Service{
 		cfg: cfg,
 		r:   runner.New(cfg),
+		sem: make(map[string]chan struct{}),
 	}
 }
 
@@ -51,29 +57,63 @@ func (s *Service) ListTools(ctx context.Context) ([]ToolInfo, error) {
 	return out, nil
 }
 
+// ErrToolBusy é retornado quando o limite de concorrência da tool foi atingido.
+var ErrToolBusy = fmt.Errorf("tool is busy")
+
+func (s *Service) toolSemaphore(toolName string, tool config.Tool) chan struct{} {
+	s.semMu.Lock()
+	defer s.semMu.Unlock()
+
+	if ch, ok := s.sem[toolName]; ok {
+		return ch
+	}
+
+	capacity := tool.MaxConc() // default conservador no config
+	ch := make(chan struct{}, capacity)
+	s.sem[toolName] = ch
+	return ch
+}
+
+func acquireSemaphore(ctx context.Context, sem chan struct{}) error {
+	// Fail-fast (evita fila infinita e fork-bomb por paralelismo)
+	select {
+	case sem <- struct{}{}:
+		return nil
+	default:
+		return ErrToolBusy
+	}
+}
+
+func releaseSemaphore(sem chan struct{}) {
+	select {
+	case <-sem:
+	default:
+	}
+}
+
 // StreamTool executa a tool (launcher), manda 1 input (linha JSON) e streama stdout linha a linha.
 //
-// Importante: este método monitora ctx.Done() e mata o processo ao cancelar (ex.: cliente SSE desconectou).
-// Também valida toolName via sandbox, para que HTTP e stdio compartilhem a mesma regra.
+// Invariantes:
+// - toolName validado via sandbox
+// - toda execução tem timeout (Tool.Timeout())
+// - processo é finalizado em cancelamento (ctx.Done())
 func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []byte, out LineWriter) (retErr error) {
 	start := time.Now()
 
 	// Logger request-scoped (vem do middleware HTTP) ou slog.Default() se não houver.
 	baseLog := logging.LoggerFromContext(ctx)
 
-	// Pega runtime (do config via tool) para logs e correlação.
-	// Se o seu Tool não tiver .Runtime, ajuste essa linha.
-	var runtimeName string
-
 	// request_id (se existir no ctx)
 	rid := logging.RequestIDFromContext(ctx)
 
-	// Só adiciona campos fixos após validarmos o tool e obtivermos o runtime.
-	// Enquanto isso, log básico:
+	// logger base (tool + request_id)
 	log := baseLog.With(
 		logging.RequestID(rid),
 		logging.Tool(toolName),
 	)
+
+	// Pega runtime (do config via tool) para logs e correlação.
+	var runtimeName string
 
 	defer func() {
 		// log final único (success/fail) com duration e error
@@ -104,8 +144,21 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 	runtimeName = tool.Runtime
 	log = log.With(logging.Runtime(runtimeName))
 
+	// Limite de concorrência por tool
+	sem := s.toolSemaphore(toolName, tool)
+	if err := acquireSemaphore(ctx, sem); err != nil {
+		// tool busy é um erro "esperado" sob carga
+		log.Warn("tool concurrency limit reached",
+			logging.Err(err),
+			slog.Int("max_concurrent", tool.MaxConc()),
+		)
+		return err
+	}
+	defer releaseSemaphore(sem)
+
 	log.Info("tool execution started",
 		slog.String("mode", tool.Mode),
+		slog.Int("max_concurrent", tool.MaxConc()),
 	)
 
 	tctx, cancel := context.WithTimeout(ctx, tool.Timeout())
@@ -170,7 +223,7 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 
 		lines++
 		// Debug opcional (não loga conteúdo!)
-		if log.Enabled(ctx, slog.LevelDebug) && lines%200 == 0 {
+		if log.Enabled(tctx, slog.LevelDebug) && lines%200 == 0 {
 			log.Debug("streaming progress", slog.Int64("lines_out", lines))
 		}
 	}
