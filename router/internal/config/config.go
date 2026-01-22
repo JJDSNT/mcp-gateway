@@ -8,16 +8,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const DefaultToolTimeout = 30 * time.Second
+const (
+	DefaultToolTimeout      = 30 * time.Second
+	DefaultMaxConcurrent    = 1
+	MaxAllowedConcurrency   = 32 // proteção contra configs absurdas
+)
 
 type Tool struct {
+	// Execução
 	Runtime string   `yaml:"runtime"` // native | container
 	Mode    string   `yaml:"mode"`    // launcher | daemon (daemon reservado)
-	Cmd     string   `yaml:"cmd"`
-	Image   string   `yaml:"image"`
-	Args    []string `yaml:"args"`
 
-	TimeoutMS int `yaml:"timeout_ms"` // opcional; se 0 usa default
+	// Native
+	Cmd  string   `yaml:"cmd"`
+	Args []string `yaml:"args"`
+
+	// Container
+	Image string `yaml:"image"`
+
+	// Limites
+	TimeoutMS     int `yaml:"timeout_ms"`     // opcional; se 0 usa default
+	MaxConcurrent int `yaml:"max_concurrent"` // opcional; se 0 usa default
 }
 
 type Config struct {
@@ -78,14 +89,37 @@ func (c *Config) Validate() error {
 		if t.TimeoutMS < 0 {
 			return fmt.Errorf("config: tools[%s].timeout_ms must be >= 0", name)
 		}
+
+		if t.MaxConcurrent < 0 {
+			return fmt.Errorf("config: tools[%s].max_concurrent must be >= 0", name)
+		}
+
+		if t.MaxConcurrent > MaxAllowedConcurrency {
+			return fmt.Errorf(
+				"config: tools[%s].max_concurrent must be <= %d",
+				name,
+				MaxAllowedConcurrency,
+			)
+		}
 	}
 
 	return nil
 }
 
+// Timeout retorna o timeout efetivo da tool.
+// Invariante do core: NENHUMA tool roda sem timeout.
 func (t Tool) Timeout() time.Duration {
 	if t.TimeoutMS <= 0 {
 		return DefaultToolTimeout
 	}
 	return time.Duration(t.TimeoutMS) * time.Millisecond
+}
+
+// MaxConc retorna o limite efetivo de concorrência da tool.
+// Default conservador para evitar fork-bomb acidental.
+func (t Tool) MaxConc() int {
+	if t.MaxConcurrent <= 0 {
+		return DefaultMaxConcurrent
+	}
+	return t.MaxConcurrent
 }
