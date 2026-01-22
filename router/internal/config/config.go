@@ -9,15 +9,19 @@ import (
 )
 
 const (
-	DefaultToolTimeout      = 30 * time.Second
-	DefaultMaxConcurrent    = 1
-	MaxAllowedConcurrency   = 32 // proteção contra configs absurdas
+	DefaultToolTimeout    = 30 * time.Second
+	DefaultMaxConcurrent  = 1
+	MaxAllowedConcurrency = 32 // proteção contra configs absurdas
+
+	// Hardening defaults (somente container)
+	DefaultDockerNetwork = "none" // "none" | "bridge"
+	DefaultReadOnly      = true
 )
 
 type Tool struct {
 	// Execução
-	Runtime string   `yaml:"runtime"` // native | container
-	Mode    string   `yaml:"mode"`    // launcher | daemon (daemon reservado)
+	Runtime string `yaml:"runtime"` // native | container
+	Mode    string `yaml:"mode"`    // launcher | daemon (daemon reservado)
 
 	// Native
 	Cmd  string   `yaml:"cmd"`
@@ -29,6 +33,13 @@ type Tool struct {
 	// Limites
 	TimeoutMS     int `yaml:"timeout_ms"`     // opcional; se 0 usa default
 	MaxConcurrent int `yaml:"max_concurrent"` // opcional; se 0 usa default
+
+	// Hardening (somente container)
+	// docker_network: none | bridge (default: none)
+	DockerNetwork string `yaml:"docker_network"`
+	// read_only: true|false (default: true quando omitido)
+	// ponteiro permite distinguir "omitido" de "false"
+	ReadOnly *bool `yaml:"read_only"`
 }
 
 type Config struct {
@@ -78,6 +89,10 @@ func (c *Config) Validate() error {
 			if t.Image == "" {
 				return fmt.Errorf("config: tools[%s].image is required for container runtime", name)
 			}
+			// valida hardening específico do container
+			if t.DockerNetwork != "" && t.DockerNetwork != "none" && t.DockerNetwork != "bridge" {
+				return fmt.Errorf("config: tools[%s].docker_network must be none or bridge", name)
+			}
 		default:
 			return fmt.Errorf("config: tools[%s].runtime must be native or container", name)
 		}
@@ -121,5 +136,31 @@ func (t Tool) MaxConc() int {
 	if t.MaxConcurrent <= 0 {
 		return DefaultMaxConcurrent
 	}
+	if t.MaxConcurrent > MaxAllowedConcurrency {
+		return MaxAllowedConcurrency
+	}
 	return t.MaxConcurrent
+}
+
+// DockerNetworkEffective retorna o modo efetivo de rede para container.
+// Default conservador: "none".
+func (t Tool) DockerNetworkEffective() string {
+	if t.DockerNetwork == "" {
+		return DefaultDockerNetwork
+	}
+	switch t.DockerNetwork {
+	case "none", "bridge":
+		return t.DockerNetwork
+	default:
+		return DefaultDockerNetwork
+	}
+}
+
+// ReadOnlyEffective retorna se o container deve rodar read-only.
+// Default conservador: true (quando omitido).
+func (t Tool) ReadOnlyEffective() bool {
+	if t.ReadOnly == nil {
+		return DefaultReadOnly
+	}
+	return *t.ReadOnly
 }

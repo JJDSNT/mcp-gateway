@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -215,14 +216,14 @@ func (h *HTTP) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// runtime (best effort via ListTools)
+	// runtime (best effort via ListTools) - usado só para header/log
 	rt := h.lookupRuntime(r.Context(), toolName)
 
 	// request-scoped logger (from middleware) + fixed fields
 	rid := logging.RequestIDFromContext(r.Context())
 	logger := logging.LoggerFromContext(r.Context()).With(
-		slog.String("tool", toolName),
-		slog.String("runtime", rt),
+		logging.Tool(toolName),
+		logging.Runtime(rt),
 		logging.RequestID(rid),
 	)
 
@@ -257,8 +258,19 @@ func (h *HTTP) handleMCP(w http.ResponseWriter, r *http.Request) {
 	// r.Context() é cancelado quando o cliente desconecta.
 	err = h.core.StreamTool(r.Context(), toolName, body, sse)
 	if err != nil {
-		// erro antes do primeiro evento -> HTTP error
+		// regra: erro antes do primeiro evento -> HTTP error
 		if state.canHTTPError() {
+			// mapeia concorrência para 429 (fail-fast)
+			if errors.Is(err, core.ErrToolBusy) {
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "tool busy", http.StatusTooManyRequests)
+				logger.Warn("tool busy (concurrency limit)",
+					logging.Err(err),
+					logging.DurationMs(time.Since(start).Milliseconds()),
+				)
+				return
+			}
+
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			logger.Error("tool stream failed before first event",
 				logging.Err(err),
@@ -267,14 +279,20 @@ func (h *HTTP) handleMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// erro após início do streaming -> log + (opcional) event:error único
+		// regra: erro após início do streaming -> log + (opcional) event:error único
 		logger.Error("tool stream failed after start",
 			logging.Err(err),
 			logging.DurationMs(time.Since(start).Milliseconds()),
 		)
 
+		// Evita múltiplos erros em SSE
 		state.trySendStreamError(func() error {
-			return sendSSE(w, "error", map[string]string{"error": err.Error()})
+			// Para busy pós-início (raro), também vira error event.
+			msg := err.Error()
+			if errors.Is(err, core.ErrToolBusy) {
+				msg = "tool busy"
+			}
+			return sendSSE(w, "error", map[string]string{"error": msg})
 		})
 		flusher.Flush()
 		return
