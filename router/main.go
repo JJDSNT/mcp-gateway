@@ -48,7 +48,7 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      0,                // SSE
+		WriteTimeout:      0,                 // SSE
 		IdleTimeout:       60 * time.Second, // keep-alive
 	}
 
@@ -66,7 +66,6 @@ func main() {
 	case <-ctx.Done():
 		log.Println("shutdown signal received")
 	case err := <-errCh:
-		// se o server cair por outro motivo
 		if err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -84,36 +83,30 @@ func main() {
 }
 
 func handleMCP(w http.ResponseWriter, r *http.Request) {
-	
-	// P1: hardening de métodos
-    switch r.Method {
-    case http.MethodGet, http.MethodPost:
-        // ok
-    default:
-        http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
+	switch r.Method {
+	case http.MethodGet, http.MethodPost:
+		// ok
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-    // P1: validar Content-Type quando aplicável (POST com JSON)
-    if r.Method == http.MethodPost {
-        ct := r.Header.Get("Content-Type")
-        if ct == "" {
-            http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
-            return
-        }
+	if r.Method == http.MethodPost {
+		ct := r.Header.Get("Content-Type")
+		if ct == "" {
+			http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+			return
+		}
+		mediaType, _, err := mime.ParseMediaType(ct)
+		if err != nil || mediaType != "application/json" {
+			http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+			return
+		}
+	}
 
-        mediaType, _, err := mime.ParseMediaType(ct)
-        if err != nil || mediaType != "application/json" {
-            http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
-            return
-        }
-    }
-
-	
 	toolName := strings.TrimPrefix(r.URL.Path, "/mcp/")
 	toolName = strings.Trim(toolName, "/")
 
-	// Validar tool name (P0: bloqueia caracteres suspeitos)
 	if err := sandbox.ValidateToolName(toolName); err != nil {
 		log.Printf("invalid tool name %q: %v", toolName, err)
 		http.Error(w, "invalid tool name", http.StatusBadRequest)
@@ -127,7 +120,6 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
@@ -154,7 +146,7 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// timeout por tool
+	// O r.Context() é automaticamente cancelado quando o cliente TCP desconecta.
 	ctx, cancel := context.WithTimeout(r.Context(), tool.Timeout())
 	defer cancel()
 
@@ -162,6 +154,8 @@ func handleMCP(w http.ResponseWriter, r *http.Request) {
 
 	err = runLauncher(ctx, toolName, tool, body, w, flusher)
 	if err != nil {
+		log.Printf("[tool=%s] launcher error: %v", toolName, err)
+		// Envio de erro só funciona se o cliente ainda estiver conectado
 		_ = sendSSE(w, "error", map[string]string{"error": err.Error()})
 		flusher.Flush()
 	}
@@ -179,6 +173,18 @@ func runLauncher(
 	if err != nil {
 		return err
 	}
+
+	// Monitor de Contexto: Força o proc.Close() (que por sua vez chama o KillProcess e fecha os pipes)
+	// assim que o cliente desconecta. Isso desbloqueia o scanner.Scan() na goroutine abaixo.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			proc.Close()
+		case <-done:
+		}
+	}()
+	defer close(done)
 	defer proc.Close()
 
 	stdin := proc.Stdin()
@@ -186,68 +192,58 @@ func runLauncher(
 	if err != nil {
 		return err
 	}
-
-	if err := stdin.Close(); err != nil {
-		// não falha request por isso; só loga
-		log.Printf("[tool=%s] stdin close error: %v", toolName, err)
-	}
+	stdin.Close()
 
 	stdout := proc.Stdout()
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
-	// Canaliza linhas e erros para conseguir interromper imediatamente no ctx.Done().
 	lines := make(chan []byte, 8)
 	scanErr := make(chan error, 1)
 
 	go func() {
 		defer close(lines)
-
 		for scanner.Scan() {
-			// Copia o buffer do scanner, porque scanner.Bytes() muda a cada Scan()
 			b := append([]byte(nil), scanner.Bytes()...)
 			lines <- b
 		}
-		// scanner terminou: registra erro (ou nil)
 		scanErr <- scanner.Err()
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Cliente desconectou / timeout da tool: mata o processo via defer proc.Close()
+			// O processo será morto pelo monitor acima ou pelo defer proc.Close()
 			return ctx.Err()
 
 		case line, ok := <-lines:
 			if !ok {
-				// Acabou o scan: pega erro do scanner e depois espera o processo
 				if err := <-scanErr; err != nil {
 					return err
 				}
 				return proc.Wait()
 			}
 
-		if err := sendRawSSE(w, "message", line); err != nil {
-			return err
-		}
-		flusher.Flush()
+			if err := sendRawSSE(w, "message", line); err != nil {
+				// Falha no envio (ex: Broken Pipe) indica desconexão do cliente.
+				return err
+			}
+			flusher.Flush()
 		}
 	}
 }
-
 
 func sendSSE(w http.ResponseWriter, event string, payload any) error {
 	data, _ := json.Marshal(payload)
 	return sendRawSSE(w, event, data)
 }
 
-
 func sendRawSSE(w http.ResponseWriter, event string, data []byte) error {
-	_, err := fmt.Fprintf(w, "event: %s\n", event)
-	if err != nil {
+	if _, err := fmt.Fprintf(w, "event: %s\n", event); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "data: %s\n\n", bytes.TrimSpace(data))
-	return err
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", bytes.TrimSpace(data)); err != nil {
+		return err
+	}
+	return nil
 }
-

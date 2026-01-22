@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"syscall"
 
 	"mcp-router/internal/config"
 )
@@ -19,6 +20,13 @@ func (NativeRuntime) Spawn(ctx context.Context, cfg *config.Config, tool config.
 
 	cmd := exec.CommandContext(ctx, tool.Cmd, tool.Args...)
 	cmd.Env = env
+
+	// P0: Crucial para o teste de Kill/Disconnect. 
+	// Setpgid cria um novo ID de grupo de processos. 
+	// Quando matarmos o PID com sinal negativo, o Kernel mata a árvore toda.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

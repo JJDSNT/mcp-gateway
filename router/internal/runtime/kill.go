@@ -8,29 +8,27 @@ import (
 	"time"
 )
 
-// KillProcess encerra um *exec.Cmd de forma best-effort.
-// Importante: NÃO chama Wait() aqui para evitar corrida/double-wait com cmd.Wait()
-// que já é chamado no fluxo normal do router.
 func KillProcess(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
 
-	// Tenta graceful no Unix.
 	if runtime.GOOS != "windows" {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-		// Pequena janela para o processo reagir (ex: escrever marker e sair)
-		time.Sleep(300 * time.Millisecond)
-	}
+		// 1. Enviamos SIGTERM para o GRUPO (-Pid). 
+		// O sinal negativo indica que todos os processos no grupo recebem o sinal.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 
-	// Força encerramento (best-effort)
-	_ = cmd.Process.Kill()
+		// 2. Janela de fôlego para o processo escrever o marker e fechar pipes.
+		time.Sleep(150 * time.Millisecond)
+
+		// 3. SIGKILL final para garantir que nada fique pendurado (zumbis).
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	} else {
+		_ = cmd.Process.Kill()
+	}
 }
 
-// (Opcional) KillOSProcess existe caso você precise matar um *os.Process no futuro.
 func KillOSProcess(p *os.Process) error {
-	if p == nil {
-		return nil
-	}
+	if p == nil { return nil }
 	return p.Kill()
 }
