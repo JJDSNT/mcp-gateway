@@ -8,45 +8,40 @@ import (
 	"io"
 	"os"
 	"sync"
+
+	"mcp-router/internal/core"
 )
 
-type Core interface {
-	StreamTool(ctx context.Context, toolName string, inputJSON []byte, out LineWriter) error
-	ListTools(ctx context.Context) ([]any, error) // não usado agora; pode remover se quiser
-}
+// Protocolo de entrada (1 JSON por linha):
+// {"id":"1","tool":"echo","input":{"hello":"world"}}
+//
+// Saídas (JSON lines):
+// {"id":"1","event":"message","data":<linha json do stdout da tool>}
+// {"id":"1","event":"done","data":{"ok":true}}
+// {"id":"1","event":"error","data":{"error":"...", "detail":"..."}}
 
-type LineWriter interface {
-	WriteLine([]byte) error
-}
-
-type Request struct {
-	ID    string          `json:"id,omitempty"`
-	Tool  string          `json:"tool"`
-	Input json.RawMessage `json:"input"`
-}
-
-type Transport struct {
-	core any // vamos receber *core.Service direto no main e usar interface mínima abaixo
+type Stdio struct {
+	core *core.Service
 	in   io.Reader
 	out  io.Writer
 	mu   sync.Mutex
 }
 
-type service interface {
-	StreamTool(ctx context.Context, toolName string, inputJSON []byte, out LineWriter) error
+type StdioRequest struct {
+	ID    string          `json:"id,omitempty"`
+	Tool  string          `json:"tool"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
-func New(svc service) *Transport {
-	return &Transport{
+func NewStdio(svc *core.Service) *Stdio {
+	return &Stdio{
 		core: svc,
 		in:   os.Stdin,
 		out:  os.Stdout,
 	}
 }
 
-func (t *Transport) Run(ctx context.Context) error {
-	svc := t.core.(service)
-
+func (t *Stdio) Run(ctx context.Context) error {
 	sc := bufio.NewScanner(t.in)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
@@ -56,9 +51,12 @@ func (t *Transport) Run(ctx context.Context) error {
 			continue
 		}
 
-		var req Request
+		var req StdioRequest
 		if err := json.Unmarshal(line, &req); err != nil {
-			_ = t.emit(req.ID, "error", map[string]any{"error": "invalid_json", "detail": err.Error()})
+			_ = t.emit(req.ID, "error", map[string]any{
+				"error":  "invalid_json",
+				"detail": err.Error(),
+			})
 			continue
 		}
 		if req.Tool == "" {
@@ -69,10 +67,13 @@ func (t *Transport) Run(ctx context.Context) error {
 			req.Input = json.RawMessage(`{}`)
 		}
 
-		w := &stdoutWriter{id: req.ID, emitRaw: t.emitRaw}
+		w := &stdioWriter{id: req.ID, emitRaw: t.emitRaw}
 
-		if err := svc.StreamTool(ctx, req.Tool, req.Input, w); err != nil {
-			_ = t.emit(req.ID, "error", map[string]any{"error": "tool_failed", "detail": err.Error()})
+		if err := t.core.StreamTool(ctx, req.Tool, req.Input, w); err != nil {
+			_ = t.emit(req.ID, "error", map[string]any{
+				"error":  "tool_failed",
+				"detail": err.Error(),
+			})
 			continue
 		}
 		_ = t.emit(req.ID, "done", map[string]any{"ok": true})
@@ -84,22 +85,23 @@ func (t *Transport) Run(ctx context.Context) error {
 	return nil
 }
 
-type stdoutWriter struct {
+// stdioWriter implementa core.LineWriter: cada linha de stdout vira um evento "message".
+type stdioWriter struct {
 	id      string
 	emitRaw func(id, event string, data json.RawMessage) error
 }
 
-func (w *stdoutWriter) WriteLine(line []byte) error {
-	// tool já imprime JSON por linha => data é esse JSON
+func (w *stdioWriter) WriteLine(line []byte) error {
+	// a tool já imprime JSON por linha => data é esse JSON "raw"
 	return w.emitRaw(w.id, "message", json.RawMessage(append([]byte(nil), line...)))
 }
 
-func (t *Transport) emit(id, event string, payload any) error {
+func (t *Stdio) emit(id, event string, payload any) error {
 	b, _ := json.Marshal(payload)
 	return t.emitRaw(id, event, json.RawMessage(b))
 }
 
-func (t *Transport) emitRaw(id, event string, data json.RawMessage) error {
+func (t *Stdio) emitRaw(id, event string, data json.RawMessage) error {
 	resp := map[string]any{"event": event}
 	if id != "" {
 		resp["id"] = id
