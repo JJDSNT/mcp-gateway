@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strings"
 	"time"
 
 	"mcp-router/internal/core"
+	"mcp-router/internal/observability/logging"
+	"mcp-router/internal/runtime"
 	"mcp-router/internal/sandbox"
 )
 
@@ -27,6 +30,9 @@ func NewHTTP(c *core.Service) *HTTP {
 
 // Register registra as rotas HTTP do gateway.
 func (h *HTTP) Register(mux *http.ServeMux) {
+	mux.HandleFunc("/healthz", h.handleHealthz)
+	mux.HandleFunc("/readyz", h.handleReadyz)
+
 	mux.HandleFunc("/mcp/tools", h.handleTools)
 	mux.HandleFunc("/mcp/", h.handleMCP)
 }
@@ -40,7 +46,7 @@ func (h *HTTP) Run(ctx context.Context, addr string) error {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           WrapHardening(mux),
+		Handler:           WrapHardening(logging.Middleware(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      0,                // SSE
@@ -91,6 +97,64 @@ func WrapHardening(next http.Handler) http.Handler {
 	})
 }
 
+func (h *HTTP) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok\n"))
+}
+
+func (h *HTTP) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	tools, err := h.core.ListTools(r.Context())
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ready":  false,
+			"reason": "list_tools_failed",
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	needsDocker := false
+	for _, t := range tools {
+		if t.Runtime == "container" {
+			needsDocker = true
+			break
+		}
+	}
+
+	runtimes := map[string]any{
+		"native": true,
+	}
+
+	if needsDocker {
+		if err := runtime.DockerReady(r.Context()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ready":  false,
+				"reason": "docker_unavailable",
+				"error":  err.Error(),
+				"runtimes": map[string]any{
+					"native":    true,
+					"container": false,
+				},
+			})
+			return
+		}
+		runtimes["container"] = true
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ready":         true,
+		"config_loaded": true,
+		"tools":         len(tools),
+		"runtimes":      runtimes,
+	})
+}
+
 func (h *HTTP) handleTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -108,6 +172,8 @@ func (h *HTTP) handleTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HTTP) handleMCP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -149,7 +215,28 @@ func (h *HTTP) handleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SSE headers
+	// runtime (best effort via ListTools)
+	rt := h.lookupRuntime(r.Context(), toolName)
+
+	// request-scoped logger (from middleware) + fixed fields
+	rid := logging.RequestIDFromContext(r.Context())
+	logger := logging.LoggerFromContext(r.Context()).With(
+		slog.String("tool", toolName),
+		slog.String("runtime", rt),
+		logging.RequestID(rid),
+	)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		logger.Error("streaming unsupported",
+			logging.Err(fmt.Errorf("http.Flusher not supported")),
+			logging.DurationMs(time.Since(start).Milliseconds()),
+		)
+		return
+	}
+
+	// SSE headers (somente depois de validar tudo)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -160,27 +247,42 @@ func (h *HTTP) handleMCP(w http.ResponseWriter, r *http.Request) {
 	if d, ok := h.core.ToolTimeout(toolName); ok {
 		w.Header().Set("X-MCP-Timeout", d.String())
 	}
-
-	// runtime (best effort via ListTools)
-	if rt := h.lookupRuntime(r.Context(), toolName); rt != "" {
+	if rt != "" {
 		w.Header().Set("X-MCP-Runtime", rt)
 	}
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	// Cada linha de stdout vira um SSE event "message"
-	sse := &sseWriter{w: w, f: flusher}
+	state := &streamState{}
+	sse := &sseWriter{w: w, f: flusher, state: state}
 
 	// r.Context() é cancelado quando o cliente desconecta.
-	if err := h.core.StreamTool(r.Context(), toolName, body, sse); err != nil {
-		_ = sendSSE(w, "error", map[string]string{"error": err.Error()})
+	err = h.core.StreamTool(r.Context(), toolName, body, sse)
+	if err != nil {
+		// erro antes do primeiro evento -> HTTP error
+		if state.canHTTPError() {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			logger.Error("tool stream failed before first event",
+				logging.Err(err),
+				logging.DurationMs(time.Since(start).Milliseconds()),
+			)
+			return
+		}
+
+		// erro após início do streaming -> log + (opcional) event:error único
+		logger.Error("tool stream failed after start",
+			logging.Err(err),
+			logging.DurationMs(time.Since(start).Milliseconds()),
+		)
+
+		state.trySendStreamError(func() error {
+			return sendSSE(w, "error", map[string]string{"error": err.Error()})
+		})
 		flusher.Flush()
 		return
 	}
+
+	logger.Info("tool stream completed",
+		logging.DurationMs(time.Since(start).Milliseconds()),
+	)
 }
 
 // lookupRuntime pega runtime via ListTools (para header). Evita o transport conhecer config diretamente.
@@ -197,13 +299,38 @@ func (h *HTTP) lookupRuntime(ctx context.Context, toolName string) string {
 	return ""
 }
 
+// streamState controla a semântica de erro SSE:
+// - erro antes de iniciar streaming -> HTTP error
+// - erro após iniciar streaming -> log + event:error (opcional)
+// - evita múltiplos eventos de erro
+type streamState struct {
+	started   bool
+	errorSent bool
+}
+
+func (s *streamState) markStarted() { s.started = true }
+func (s *streamState) canHTTPError() bool {
+	return !s.started
+}
+func (s *streamState) trySendStreamError(send func() error) {
+	if s.errorSent {
+		return
+	}
+	s.errorSent = true
+	_ = send()
+}
+
 // sseWriter implementa core.LineWriter.
 type sseWriter struct {
-	w http.ResponseWriter
-	f http.Flusher
+	w     http.ResponseWriter
+	f     http.Flusher
+	state *streamState
 }
 
 func (s *sseWriter) WriteLine(line []byte) error {
+	if !s.state.started {
+		s.state.markStarted()
+	}
 	if err := sendRawSSE(s.w, "message", line); err != nil {
 		return err
 	}
