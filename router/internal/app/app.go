@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"log"
 
 	"mcp-router/internal/config"
 	"mcp-router/internal/core"
@@ -9,7 +11,6 @@ import (
 )
 
 type App struct {
-	core  *core.Service
 	http  *transport.HTTP
 	stdio *transport.Stdio
 }
@@ -17,13 +18,18 @@ type App struct {
 func New(configPath string) (*App, error) {
 	cfg, err := config.LoadFromFile(configPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load config: %w", err)
 	}
 
 	svc := core.New(cfg)
 
+	// opcional: log centralizado aqui
+	log.Println("Loaded tools:")
+	for k := range cfg.Tools {
+		log.Println(" -", k)
+	}
+
 	return &App{
-		core:  svc,
 		http:  transport.NewHTTP(svc),
 		stdio: transport.NewStdio(svc),
 	}, nil
