@@ -74,7 +74,7 @@ func (s *Service) toolSemaphore(toolName string, tool config.Tool) chan struct{}
 	return ch
 }
 
-func acquireSemaphore(ctx context.Context, sem chan struct{}) error {
+func acquireSemaphore(sem chan struct{}) error {
 	// Fail-fast (evita fila infinita e fork-bomb por paralelismo)
 	select {
 	case sem <- struct{}{}:
@@ -100,23 +100,17 @@ func releaseSemaphore(sem chan struct{}) {
 func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []byte, out LineWriter) (retErr error) {
 	start := time.Now()
 
-	// Logger request-scoped (vem do middleware HTTP) ou slog.Default() se não houver.
 	baseLog := logging.LoggerFromContext(ctx)
-
-	// request_id (se existir no ctx)
 	rid := logging.RequestIDFromContext(ctx)
 
-	// logger base (tool + request_id)
 	log := baseLog.With(
 		logging.RequestID(rid),
 		logging.Tool(toolName),
 	)
 
-	// Pega runtime (do config via tool) para logs e correlação.
 	var runtimeName string
 
 	defer func() {
-		// log final único (success/fail) com duration e error
 		if retErr != nil {
 			log.Error("tool execution failed",
 				logging.Runtime(runtimeName),
@@ -140,14 +134,12 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 		return err
 	}
 
-	// Atualiza runtime e logger agora que temos o tool
 	runtimeName = tool.Runtime
 	log = log.With(logging.Runtime(runtimeName))
 
 	// Limite de concorrência por tool
 	sem := s.toolSemaphore(toolName, tool)
-	if err := acquireSemaphore(ctx, sem); err != nil {
-		// tool busy é um erro "esperado" sob carga
+	if err := acquireSemaphore(sem); err != nil {
 		log.Warn("tool concurrency limit reached",
 			logging.Err(err),
 			slog.Int("max_concurrent", tool.MaxConc()),
@@ -171,7 +163,7 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 
 	log.Debug("process started")
 
-	// Garante cleanup e também garante kill no cancelamento (cliente desconectou / timeout).
+	// Garante kill no cancelamento + cleanup
 	done := make(chan struct{})
 	go func() {
 		select {
@@ -183,7 +175,6 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 	defer close(done)
 	defer func() { _ = p.Close() }()
 
-	// garante input JSON válido; se vier vazio, manda {}
 	if len(inputJSON) == 0 {
 		inputJSON = []byte(`{}`)
 	}
@@ -191,19 +182,15 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 		return fmt.Errorf("invalid input json")
 	}
 
-	// Escreve UMA linha no stdin e fecha (importante pro launcher finalizar).
 	if err := writeJSONLineAndClose(p.Stdin(), inputJSON); err != nil {
 		return fmt.Errorf("write stdin: %w", err)
 	}
 
-	// stdout streaming
 	sc := bufio.NewScanner(p.Stdout())
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
 	var lines int64
-
 	for sc.Scan() {
-		// Se o contexto foi cancelado, finalize cedo.
 		select {
 		case <-tctx.Done():
 			return tctx.Err()
@@ -215,14 +202,11 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 			continue
 		}
 
-		// envia a linha para o transport (SSE/stdio)
 		if err := out.WriteLine(line); err != nil {
-			// erro ao escrever (ex.: broken pipe no SSE) => caller desconectou
 			return err
 		}
 
 		lines++
-		// Debug opcional (não loga conteúdo!)
 		if log.Enabled(tctx, slog.LevelDebug) && lines%200 == 0 {
 			log.Debug("streaming progress", slog.Int64("lines_out", lines))
 		}
@@ -232,7 +216,6 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 		return fmt.Errorf("read stdout: %w", err)
 	}
 
-	// espera fim do processo
 	if err := p.Wait(); err != nil {
 		return err
 	}
@@ -244,8 +227,6 @@ func writeJSONLineAndClose(w io.WriteCloser, b []byte) error {
 	if len(b) == 0 {
 		b = []byte(`{}`)
 	}
-
-	// garante newline
 	if b[len(b)-1] != '\n' {
 		b = append(b, '\n')
 	}
@@ -256,7 +237,6 @@ func writeJSONLineAndClose(w io.WriteCloser, b []byte) error {
 	return w.Close()
 }
 
-// util pra quando você quiser expor timeout também (opcional)
 func (s *Service) ToolTimeout(name string) (time.Duration, bool) {
 	t, ok := s.cfg.Tools[name]
 	if !ok {

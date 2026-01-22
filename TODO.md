@@ -1,7 +1,7 @@
 # Pendências Técnicas (Estado Atual)
 
 
-## 🔴 Prioridade 1 — Segurança mínima para tunelamento
+## 🔴 Prioridade 1 — Segurança mínima para tunelamento (DONE)
 
 > **Objetivo:** permitir exposição via Cloudflare Tunnel/Access sem riscos óbvios.
 
@@ -28,7 +28,7 @@
 
 ---
 
-## 🟠 Prioridade 2 — Operação segura e previsível
+## 🟠 Prioridade 2 — Operação segura e previsível (DONE)
 
 > **Objetivo:** debugar e operar o gateway com confiança.
 

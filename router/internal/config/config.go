@@ -9,7 +9,14 @@ import (
 )
 
 const (
-	DefaultToolTimeout    = 30 * time.Second
+	// Fail-safe defaults
+	DefaultToolTimeout = 30 * time.Second
+
+	// Teto absoluto para evitar processos "quase eternos" por config acidental.
+	// Ajuste livre (ex.: 10m, 30m). Para lab, 10m é bem razoável.
+	MaxToolTimeout = 10 * time.Minute
+
+	// Concurrency defaults
 	DefaultMaxConcurrent  = 1
 	MaxAllowedConcurrency = 32 // proteção contra configs absurdas
 
@@ -101,14 +108,28 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("config: tools[%s].mode must be launcher or daemon", name)
 		}
 
+		// ---- Fail-safe invariants ----
 		if t.TimeoutMS < 0 {
 			return fmt.Errorf("config: tools[%s].timeout_ms must be >= 0", name)
 		}
+		// Garante timeout efetivo e teto máximo
+		effectiveTimeout := t.Timeout()
+		if effectiveTimeout <= 0 {
+			return fmt.Errorf("config: tools[%s] must have a positive timeout (effective timeout <= 0)", name)
+		}
+		if effectiveTimeout > MaxToolTimeout {
+			return fmt.Errorf(
+				"config: tools[%s].timeout_ms too large (effective timeout %s exceeds max %s)",
+				name,
+				effectiveTimeout,
+				MaxToolTimeout,
+			)
+		}
 
+		// ---- Concurrency invariants ----
 		if t.MaxConcurrent < 0 {
 			return fmt.Errorf("config: tools[%s].max_concurrent must be >= 0", name)
 		}
-
 		if t.MaxConcurrent > MaxAllowedConcurrency {
 			return fmt.Errorf(
 				"config: tools[%s].max_concurrent must be <= %d",
