@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"mcp-router/internal/config"
+	"mcp-router/internal/observability/logging"
 	"mcp-router/internal/runner"
 	"mcp-router/internal/sandbox"
 )
@@ -53,7 +55,42 @@ func (s *Service) ListTools(ctx context.Context) ([]ToolInfo, error) {
 //
 // Importante: este método monitora ctx.Done() e mata o processo ao cancelar (ex.: cliente SSE desconectou).
 // Também valida toolName via sandbox, para que HTTP e stdio compartilhem a mesma regra.
-func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []byte, out LineWriter) error {
+func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []byte, out LineWriter) (retErr error) {
+	start := time.Now()
+
+	// Logger request-scoped (vem do middleware HTTP) ou slog.Default() se não houver.
+	baseLog := logging.LoggerFromContext(ctx)
+
+	// Pega runtime (do config via tool) para logs e correlação.
+	// Se o seu Tool não tiver .Runtime, ajuste essa linha.
+	var runtimeName string
+
+	// request_id (se existir no ctx)
+	rid := logging.RequestIDFromContext(ctx)
+
+	// Só adiciona campos fixos após validarmos o tool e obtivermos o runtime.
+	// Enquanto isso, log básico:
+	log := baseLog.With(
+		logging.RequestID(rid),
+		logging.Tool(toolName),
+	)
+
+	defer func() {
+		// log final único (success/fail) com duration e error
+		if retErr != nil {
+			log.Error("tool execution failed",
+				logging.Runtime(runtimeName),
+				logging.DurationMs(time.Since(start).Milliseconds()),
+				logging.Err(retErr),
+			)
+		} else {
+			log.Info("tool execution completed",
+				logging.Runtime(runtimeName),
+				logging.DurationMs(time.Since(start).Milliseconds()),
+			)
+		}
+	}()
+
 	if err := sandbox.ValidateToolName(toolName); err != nil {
 		return fmt.Errorf("invalid tool name: %w", err)
 	}
@@ -63,6 +100,14 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 		return err
 	}
 
+	// Atualiza runtime e logger agora que temos o tool
+	runtimeName = tool.Runtime
+	log = log.With(logging.Runtime(runtimeName))
+
+	log.Info("tool execution started",
+		slog.String("mode", tool.Mode),
+	)
+
 	tctx, cancel := context.WithTimeout(ctx, tool.Timeout())
 	defer cancel()
 
@@ -70,6 +115,8 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 	if err != nil {
 		return err
 	}
+
+	log.Debug("process started")
 
 	// Garante cleanup e também garante kill no cancelamento (cliente desconectou / timeout).
 	done := make(chan struct{})
@@ -100,6 +147,8 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 	sc := bufio.NewScanner(p.Stdout())
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
+	var lines int64
+
 	for sc.Scan() {
 		// Se o contexto foi cancelado, finalize cedo.
 		select {
@@ -112,11 +161,20 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 		if len(line) == 0 {
 			continue
 		}
+
+		// envia a linha para o transport (SSE/stdio)
 		if err := out.WriteLine(line); err != nil {
 			// erro ao escrever (ex.: broken pipe no SSE) => caller desconectou
 			return err
 		}
+
+		lines++
+		// Debug opcional (não loga conteúdo!)
+		if log.Enabled(ctx, slog.LevelDebug) && lines%200 == 0 {
+			log.Debug("streaming progress", slog.Int64("lines_out", lines))
+		}
 	}
+
 	if err := sc.Err(); err != nil {
 		return fmt.Errorf("read stdout: %w", err)
 	}
@@ -125,6 +183,7 @@ func (s *Service) StreamTool(ctx context.Context, toolName string, inputJSON []b
 	if err := p.Wait(); err != nil {
 		return err
 	}
+
 	return nil
 }
 
