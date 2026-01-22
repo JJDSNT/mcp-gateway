@@ -8,9 +8,13 @@ DIST_DIR := dist
 CERTS_DIR := certs
 
 # ----------------------------
-# Binary
+# Binaries
 # ----------------------------
 BIN := mcp-gw
+
+# Windows shims (para Claude Desktop / STDIO->HTTP etc.)
+SHIM_PROC := mcp-gw-shim-proc.exe
+SHIM_XPORT := mcp-gw-shim-xport.exe
 
 # ----------------------------
 # Docker
@@ -30,9 +34,9 @@ GO_WINDOWS_ENV := GOOS=windows GOARCH=amd64
 .PHONY: help \
         up down rebuild ps logs tunnel-up tunnel-down \
         cert-export cert-export-check cert-install-wsl \
-        build build-linux build-windows clean \
-        install-linux uninstall-linux \
-        test fmt tidy
+        build build-linux build-windows build-shims build-shim-proc build-shim-xport \
+        clean install-linux uninstall-linux \
+        verify test fmt tidy
 
 # ----------------------------
 # Help
@@ -54,12 +58,14 @@ help:
 	@echo "  cert-install-wsl   - install exported root CA into Linux/WSL trust store"
 	@echo ""
 	@echo "Build:"
-	@echo "  build              - build linux + windows binaries into ./dist/"
+	@echo "  build              - build linux + windows + shims into ./dist/"
 	@echo "  build-linux        - build linux binary"
 	@echo "  build-windows      - build windows binary"
+	@echo "  build-shims        - build windows shims (proc + xport)"
 	@echo "  install-linux      - install linux binary to /usr/local/bin (sudo)"
 	@echo ""
 	@echo "Dev:"
+	@echo "  verify             - quick verify: test + build-linux"
 	@echo "  test               - go test ./... (router)"
 	@echo "  fmt                - gofmt"
 	@echo "  tidy               - go mod tidy"
@@ -120,7 +126,7 @@ cert-install-wsl:
 # ----------------------------
 # Go build
 # ----------------------------
-build: build-linux build-windows
+build: build-linux build-windows build-shims
 
 build-linux:
 	@mkdir -p $(DIST_DIR)
@@ -131,6 +137,18 @@ build-windows:
 	@mkdir -p $(DIST_DIR)
 	@echo "Building $(BIN).exe for windows/amd64..."
 	cd $(ROUTER_DIR) && $(GO_WINDOWS_ENV) $(GO) build -o ../$(DIST_DIR)/$(BIN).exe .
+
+build-shims: build-shim-proc build-shim-xport
+
+build-shim-proc:
+	@mkdir -p $(DIST_DIR)
+	@echo "Building $(SHIM_PROC) for windows/amd64..."
+	cd $(ROUTER_DIR) && $(GO_WINDOWS_ENV) $(GO) build -o ../$(DIST_DIR)/$(SHIM_PROC) ./cmd/mcp-gw-shim-proc
+
+build-shim-xport:
+	@mkdir -p $(DIST_DIR)
+	@echo "Building $(SHIM_XPORT) for windows/amd64..."
+	cd $(ROUTER_DIR) && $(GO_WINDOWS_ENV) $(GO) build -o ../$(DIST_DIR)/$(SHIM_XPORT) ./cmd/mcp-gw-shim-xport
 
 install-linux: build-linux
 	@echo "Installing to /usr/local/bin/$(BIN) (requires sudo)..."
@@ -146,6 +164,9 @@ uninstall-linux:
 # ----------------------------
 # Go dev helpers
 # ----------------------------
+verify: test build-linux
+	@echo "OK: test + build-linux passed"
+
 test:
 	cd $(ROUTER_DIR) && $(GO) test -count=1 ./...
 

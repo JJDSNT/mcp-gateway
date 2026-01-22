@@ -50,9 +50,11 @@ exit 0
 		"> /tmp/output",
 	}
 
+	// Hardening defaults: network=none, read_only=true
 	tool := config.Tool{
-		Image: "alpine:latest",
-		Args:  append([]string{"echoargs"}, dangerous...),
+		Runtime: "container",
+		Image:   "alpine:latest",
+		Args:    append([]string{"echoargs"}, dangerous...),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -74,30 +76,48 @@ exit 0
 
 	lines := strings.Split(strings.TrimSpace(string(outBytes)), "\n")
 
-	// Assert: prefix esperado
-	wantPrefix := []string{
-		"run", "-i", "--rm",
-		"-v", fmt.Sprintf("%s:/workspaces", cfg.WorkspaceRoot),
-		tool.Image,
-		"echoargs",
+	// Assert: começa com run -i --rm
+	wantStart := []string{"run", "-i", "--rm"}
+	if len(lines) < len(wantStart) {
+		t.Fatalf("expected at least %d args, got %d: %q", len(wantStart), len(lines), string(outBytes))
 	}
-	if len(lines) < len(wantPrefix) {
-		t.Fatalf("expected at least %d args, got %d: %q", len(wantPrefix), len(lines), string(outBytes))
-	}
-	for i, want := range wantPrefix {
+	for i, want := range wantStart {
 		if lines[i] != want {
 			t.Fatalf("arg[%d] mismatch: got %q want %q. full=%q", i, lines[i], want, string(outBytes))
 		}
 	}
 
-	// Assert: dangerous args entram literalmente e na ordem
-	gotDangerous := lines[len(wantPrefix):]
-	if len(gotDangerous) != len(dangerous) {
-		t.Fatalf("dangerous args count mismatch: got %d want %d. full=%q", len(gotDangerous), len(dangerous), string(outBytes))
+	// Assert: hardening flags presentes (ordem pode variar ao longo do tempo; testamos por presença)
+	mustContain := [][]string{
+		{"--security-opt=no-new-privileges"},
+		{"--cap-drop=ALL"},
+		{"--network", "none"},
+		{"--read-only"},
+		{"--tmpfs", "/tmp:rw,noexec,nosuid,size=64m"},
+		{"--tmpfs", "/var/tmp:rw,noexec,nosuid,size=64m"},
+		{"-v", fmt.Sprintf("%s:/workspaces", cfg.WorkspaceRoot)},
 	}
-	for i, want := range dangerous {
-		if gotDangerous[i] != want {
-			t.Fatalf("dangerous arg[%d] mismatch: got %q want %q", i, gotDangerous[i], want)
+	for _, seq := range mustContain {
+		if !containsSubsequence(lines, seq) {
+			t.Fatalf("missing subsequence %v. full=%q", seq, string(outBytes))
+		}
+	}
+
+	// Assert: imagem aparece e args da tool vêm depois dela (literalmente e na ordem)
+	imgIdx := indexOf(lines, tool.Image)
+	if imgIdx == -1 {
+		t.Fatalf("expected image %q in args. full=%q", tool.Image, string(outBytes))
+	}
+
+	// Tudo depois da imagem deve ser exatamente tool.Args
+	gotAfterImage := lines[imgIdx+1:]
+	if len(gotAfterImage) != len(tool.Args) {
+		t.Fatalf("tool args count mismatch: got %d want %d. afterImage=%v full=%q",
+			len(gotAfterImage), len(tool.Args), gotAfterImage, string(outBytes))
+	}
+	for i, want := range tool.Args {
+		if gotAfterImage[i] != want {
+			t.Fatalf("tool arg[%d] mismatch: got %q want %q. full=%q", i, gotAfterImage[i], want, string(outBytes))
 		}
 	}
 }
@@ -127,8 +147,9 @@ exit 0
 		ToolsRoot:     "/tools",
 	}
 	tool := config.Tool{
-		Image: "alpine:latest",
-		Args:  []string{"printenv"},
+		Runtime: "container",
+		Image:   "alpine:latest",
+		Args:    []string{"printenv"},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -184,8 +205,9 @@ done
 		ToolsRoot:     "/tools",
 	}
 	tool := config.Tool{
-		Image: "alpine:latest",
-		Args:  []string{"sleep"},
+		Runtime: "container",
+		Image:   "alpine:latest",
+		Args:    []string{"sleep"},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -210,4 +232,36 @@ done
 		_ = cmd.Process.Kill()
 		t.Fatalf("process did not exit after context cancellation")
 	}
+}
+
+// --- helpers ---
+
+func indexOf(xs []string, target string) int {
+	for i, x := range xs {
+		if x == target {
+			return i
+		}
+	}
+	return -1
+}
+
+// containsSubsequence verifica se seq aparece contiguamente em xs.
+// Útil para checar presença de flags (--network none, -v <mount>, etc).
+func containsSubsequence(xs []string, seq []string) bool {
+	if len(seq) == 0 {
+		return true
+	}
+	for i := 0; i <= len(xs)-len(seq); i++ {
+		ok := true
+		for j := 0; j < len(seq); j++ {
+			if xs[i+j] != seq[j] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
 }
