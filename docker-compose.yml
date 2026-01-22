@@ -16,7 +16,8 @@ services:
 
   mcp-router:
     build: ./router
-    container_name: mcp-router
+    container_name: mcp-gw
+    command: ["--http", ":8080"]
     expose:
       - "8080"
     volumes:
