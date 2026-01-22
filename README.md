@@ -222,6 +222,64 @@ https://mcp.seudominio.com/mcp/git
 
 ---
 
+## Fluxo Rápido para Build, Instalação e Execução
+
+### 1. Subir o Ambiente Local (Docker + HTTPS)
+
+```bash
+make up
+```
+
+### 2. Exportar o Certificado Raiz HTTPS do Caddy
+
+```bash
+make cert-export
+```
+
+### 3. Instalar o Certificado
+
+**Linux / WSL:**
+```bash
+make cert-install-wsl
+```
+
+**Windows:**
+Importar `certs/caddy-local-root.crt` em "Autoridades de Certificação Raiz Confiáveis (Computador Local)"
+
+### 4. Build do Binário MCP
+
+```bash
+make build
+```
+
+### 5. Instalar o Binário Globalmente (PATH)
+
+**Linux / WSL:**
+```bash
+make install-linux
+```
+
+**Windows:**
+Copiar `dist\mcp-gw.exe` para um diretório no PATH
+
+### 6. Executar (Modo MCP / stdio)
+
+```bash
+mcp-gw --config /caminho/para/config.yaml
+```
+
+### 7. Teste Rápido do Servidor
+
+Para verificar se o servidor está no ar:
+
+```bash
+curl -k -i -N https://localhost/mcp/echo \
+  -H "Content-Type: application/json" \
+  --data '{"hello":"world"}'
+```
+
+---
+
 ## Security Note — Docker Socket (Container Runtime)
 
 > ⚠️ **Aviso Importante**
