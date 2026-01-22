@@ -147,7 +147,7 @@ uninstall-linux:
 # Go dev helpers
 # ----------------------------
 test:
-	cd $(ROUTER_DIR) && $(GO) test ./...
+	cd $(ROUTER_DIR) && $(GO) test -count=1 ./...
 
 fmt:
 	cd $(ROUTER_DIR) && gofmt -w .
