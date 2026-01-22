@@ -1,12 +1,10 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +17,9 @@ func TestMain(m *testing.M) {
 	// Se rodarmos como helper tool, executa e sai.
 	if os.Getenv("MCP_ROUTER_TEST_HELPER") == "1" {
 		helperMain()
-		return
+		// Em teoria helperMain sempre dá os.Exit(...) em todos os caminhos,
+		// mas deixamos explícito para evitar cair em m.Run() por acidente.
+		os.Exit(0)
 	}
 	os.Exit(m.Run())
 }
@@ -29,7 +29,7 @@ func helperMain() {
 	// args[1] = subcommand
 	// - "echoargs": imprime os args após o subcommand, um por linha
 	// - "printenv": imprime WORKSPACE_ROOT e TOOLS_ROOT
-	// - "sleep": dorme até ser morto pelo contexto
+	// - "sleep": dorme até ser morto pelo contexto/kill
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "missing subcommand")
 		os.Exit(2)
@@ -60,6 +60,9 @@ func helperMain() {
 }
 
 func TestNativeRuntime_Spawn_PassesArgsLiterally(t *testing.T) {
+	// Faz o subprocesso (os.Args[0]) entrar no modo helper.
+	t.Setenv("MCP_ROUTER_TEST_HELPER", "1")
+
 	cfg := &config.Config{
 		WorkspaceRoot: "/tmp/workspaces",
 		ToolsRoot:     "/tmp/tools",
@@ -95,7 +98,12 @@ func TestNativeRuntime_Spawn_PassesArgsLiterally(t *testing.T) {
 		t.Logf("stderr: %s", string(errBytes))
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(outBytes)), "\n")
+	out := strings.TrimSpace(string(outBytes))
+	if out == "" {
+		t.Fatalf("expected output, got empty (helper mode not triggered?)")
+	}
+
+	lines := strings.Split(out, "\n")
 	if len(lines) != len(dangerous) {
 		t.Fatalf("expected %d lines, got %d. out=%q", len(dangerous), len(lines), string(outBytes))
 	}
@@ -108,6 +116,9 @@ func TestNativeRuntime_Spawn_PassesArgsLiterally(t *testing.T) {
 }
 
 func TestNativeRuntime_Spawn_SetsWorkspaceAndToolsEnv(t *testing.T) {
+	// Faz o subprocesso (os.Args[0]) entrar no modo helper.
+	t.Setenv("MCP_ROUTER_TEST_HELPER", "1")
+
 	cfg := &config.Config{
 		WorkspaceRoot: "/workspaces",
 		ToolsRoot:     "/tools",
@@ -148,6 +159,9 @@ func TestNativeRuntime_Spawn_SetsWorkspaceAndToolsEnv(t *testing.T) {
 }
 
 func TestNativeRuntime_Spawn_RespectsContextCancellation(t *testing.T) {
+	// Faz o subprocesso (os.Args[0]) entrar no modo helper.
+	t.Setenv("MCP_ROUTER_TEST_HELPER", "1")
+
 	cfg := &config.Config{
 		WorkspaceRoot: "/workspaces",
 		ToolsRoot:     "/tools",
@@ -168,7 +182,7 @@ func TestNativeRuntime_Spawn_RespectsContextCancellation(t *testing.T) {
 	// Garante que o processo iniciou.
 	time.Sleep(50 * time.Millisecond)
 
-	// Cancela o contexto -> CommandContext deve matar o processo.
+	// Cancela o contexto -> o runtime deve encerrar o processo.
 	cancel()
 
 	done := make(chan error, 1)
@@ -176,15 +190,12 @@ func TestNativeRuntime_Spawn_RespectsContextCancellation(t *testing.T) {
 
 	select {
 	case err := <-done:
-		// Esperamos que termine rápido.
 		_ = stdout.Close()
 		_ = stderr.Close()
 		if err == nil {
-			// Alguns OS retornam nil quando processo termina “limpo”, mas aqui deve ser raro.
 			t.Log("process exited cleanly after cancel (ok)")
 		}
 	case <-time.After(2 * time.Second):
-		// Se travou, é problema.
 		_ = cmd.Process.Kill()
 		t.Fatalf("process did not exit after context cancellation")
 	}
