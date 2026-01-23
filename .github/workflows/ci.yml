@@ -13,6 +13,23 @@ permissions:
   contents: read
 
 jobs:
+    enforce-dev-to-main:
+    name: Enforce dev → main
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR source branch
+        run: |
+          echo "Base branch: ${{ github.base_ref }}"
+          echo "Head branch: ${{ github.head_ref }}"
+
+          if [ "${{ github.head_ref }}" != "dev" ]; then
+            echo "❌ Pull requests to 'main' must come from 'dev'"
+            exit 1
+          fi
+
+          echo "✅ PR source branch is dev"
+
   test:
     name: Test (Go ${{ matrix.go-version }} on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
