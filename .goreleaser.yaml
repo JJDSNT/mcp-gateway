@@ -1,0 +1,27 @@
+project_name: mcp-gw
+
+builds:
+  - id: mcp-gw
+    dir: router
+    main: ./cmd/mcp-gw
+    binary: mcp-gw
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X mcp-router/internal/cli.Version={{.Tag}}
+      - -X mcp-router/internal/cli.Commit={{.FullCommit}}
+      - -X mcp-router/internal/cli.BuildDate={{.Date}}
+
+archives:
+  - id: default
+    builds:
+      - mcp-gw
+    format: tar.gz
+
+release:
+  github:
+    owner: jjdsnt
+    name: https://github.com/JJDSNT/mcp-gateway
