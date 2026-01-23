@@ -3,11 +3,34 @@
 # Reverse proxy for the MCP Gateway Lab.
 # - Routes everything under /mcp/* to the Go mcp-router
 # - Streaming-friendly (SSE)
+# - TLS always on (localhost)
+# - RSA local CA (certs/)
 # Optional: local TLS (works for localhost/LAN testing)
 # For Cloudflare Tunnel you can also run plain HTTP internally.
 
+{
+  local_certs
+
+  pki {
+    ca local {
+      root {
+        format pem_file
+        cert /etc/caddy/certs/root.crt
+        key  /etc/caddy/certs/root.key
+      }
+      intermediate {
+        format pem_file
+        cert /etc/caddy/certs/intermediate.crt
+        key  /etc/caddy/certs/intermediate.key
+      }
+    }
+  }
+}
+
 localhost {
-  tls internal
+  tls {
+    issuer internal
+  }
 
   @mcp path /mcp* /mcp/*
 

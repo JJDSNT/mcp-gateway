@@ -7,12 +7,18 @@ ROUTER_DIR := router
 DIST_DIR := dist
 CERTS_DIR := certs
 
+# Flat certs/ layout
+RSA_ROOT_KEY := $(CERTS_DIR)/root.key
+RSA_ROOT_CRT := $(CERTS_DIR)/root.crt
+RSA_INT_KEY  := $(CERTS_DIR)/intermediate.key
+RSA_INT_CRT  := $(CERTS_DIR)/intermediate.crt
+RSA_INT_CSR  := $(CERTS_DIR)/intermediate.csr
+RSA_INT_EXT  := $(CERTS_DIR)/intermediate.ext
+
 # ----------------------------
 # Binaries
 # ----------------------------
 BIN := mcp-gw
-
-# Windows shims (para Claude Desktop / STDIO->HTTP etc.)
 SHIM_PROC := mcp-gw-shim-proc.exe
 SHIM_XPORT := mcp-gw-shim-xport.exe
 
@@ -20,9 +26,6 @@ SHIM_XPORT := mcp-gw-shim-xport.exe
 # Docker
 # ----------------------------
 COMPOSE := docker compose
-CADDY_CONTAINER := mcp-caddy
-CADDY_ROOT_CA_PATH := /data/caddy/pki/authorities/local/root.crt
-CADDY_ROOT_CA_OUT := $(CERTS_DIR)/caddy-local-root.crt
 
 # ----------------------------
 # Go build
@@ -31,45 +34,39 @@ GO ?= go
 GO_LINUX_ENV := GOOS=linux GOARCH=amd64
 GO_WINDOWS_ENV := GOOS=windows GOARCH=amd64
 
-.PHONY: help \
-        up down rebuild ps logs tunnel-up tunnel-down \
-        cert-export cert-export-check cert-install-wsl \
-        build build-linux build-windows build-shims build-shim-proc build-shim-xport \
-        clean install-linux uninstall-linux \
-        verify test fmt tidy
+.PHONY: help up down rebuild ps logs \
+        rsa-gen rsa-test rsa-install-wsl \
+        build build-linux build-windows \
+        verify test fmt tidy clean
 
 # ----------------------------
 # Help
 # ----------------------------
 help:
-	@echo "Targets:"
 	@echo ""
 	@echo "Docker:"
-	@echo "  up                 - docker compose up -d --build"
-	@echo "  down               - docker compose down"
-	@echo "  rebuild            - rebuild and restart"
-	@echo "  ps                 - docker compose ps"
-	@echo "  logs               - docker compose logs -f"
-	@echo "  tunnel-up          - start with cloudflared profile"
-	@echo "  tunnel-down        - stop tunnel profile"
+	@echo "  up                - docker compose up -d --build"
+	@echo "  down              - docker compose down"
+	@echo "  rebuild           - rebuild containers"
+	@echo "  ps                - docker compose ps"
+	@echo "  logs              - docker compose logs -f"
 	@echo ""
-	@echo "Certificates (Caddy tls internal):"
-	@echo "  cert-export        - export Caddy root CA to ./certs/"
-	@echo "  cert-install-wsl   - install exported root CA into Linux/WSL trust store"
+	@echo "Certificates (RSA - default):"
+	@echo "  rsa-gen           - generate RSA root + intermediate in ./certs/"
+	@echo "  rsa-test          - inspect generated RSA certs"
+	@echo "  rsa-install-wsl   - trust RSA root in WSL/Linux"
 	@echo ""
 	@echo "Build:"
-	@echo "  build              - build linux + windows + shims into ./dist/"
-	@echo "  build-linux        - build linux binary"
-	@echo "  build-windows      - build windows binary"
-	@echo "  build-shims        - build windows shims (proc + xport)"
-	@echo "  install-linux      - install linux binary to /usr/local/bin (sudo)"
+	@echo "  build             - build linux + windows (incl. shims) into ./dist/"
+	@echo "  build-linux       - build linux binary"
+	@echo "  build-windows     - build windows gateway + shims"
 	@echo ""
 	@echo "Dev:"
-	@echo "  verify             - quick verify: test + build-linux"
-	@echo "  test               - go test ./... (router)"
-	@echo "  fmt                - gofmt"
-	@echo "  tidy               - go mod tidy"
-	@echo "  clean              - remove dist/ and certs/"
+	@echo "  verify            - test + build-linux"
+	@echo "  test              - go test"
+	@echo "  fmt               - gofmt"
+	@echo "  tidy              - go mod tidy"
+	@echo "  clean             - remove dist/ and generated certs"
 
 # ----------------------------
 # Docker lifecycle
@@ -90,79 +87,89 @@ ps:
 logs:
 	$(COMPOSE) logs -f
 
-tunnel-up:
-	$(COMPOSE) --profile tunnel up -d --build
-
-tunnel-down:
-	$(COMPOSE) --profile tunnel down
-
 # ----------------------------
-# Cert workflow (Caddy tls internal)
+# RSA PKI generation (idempotent)
 # ----------------------------
-cert-export: cert-export-check
+rsa-gen:
 	@mkdir -p $(CERTS_DIR)
-	@echo "Exporting Caddy root CA from container '$(CADDY_CONTAINER)'..."
-	docker cp $(CADDY_CONTAINER):$(CADDY_ROOT_CA_PATH) $(CADDY_ROOT_CA_OUT)
-	@echo "Saved: $(CADDY_ROOT_CA_OUT)"
+	@if [ -f "$(RSA_ROOT_CRT)" ]; then \
+		echo "RSA root certificate already exists."; \
+		echo "Using existing certificates in ./certs/"; \
+		echo ""; \
+		echo "If you want to regenerate, remove certs/root.crt and run:"; \
+		echo "  make rsa-gen"; \
+		exit 0; \
+	fi
+	@echo "Generating RSA Root CA..."
+	@openssl genrsa -out "$(RSA_ROOT_KEY)" 2048
+	@openssl req -x509 -new -nodes -key "$(RSA_ROOT_KEY)" -sha256 -days 3650 \
+		-subj "/CN=MCP Caddy Local Authority RSA Root" \
+		-out "$(RSA_ROOT_CRT)"
+	@echo "Generating RSA Intermediate CA..."
+	@openssl genrsa -out "$(RSA_INT_KEY)" 2048
+	@openssl req -new -key "$(RSA_INT_KEY)" \
+		-subj "/CN=MCP Caddy Local Authority RSA Intermediate" \
+		-out "$(RSA_INT_CSR)"
+	@printf "basicConstraints=CA:TRUE,pathlen:0\nkeyUsage=keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n" > "$(RSA_INT_EXT)"
+	@openssl x509 -req -in "$(RSA_INT_CSR)" \
+		-CA "$(RSA_ROOT_CRT)" -CAkey "$(RSA_ROOT_KEY)" -CAcreateserial \
+		-out "$(RSA_INT_CRT)" -days 3650 -sha256 -extfile "$(RSA_INT_EXT)"
+	@rm -f "$(RSA_INT_CSR)" "$(RSA_INT_EXT)" "$(CERTS_DIR)/root.srl"
 	@echo ""
-	@echo "Next steps:"
-	@echo "- Windows: import this .crt into 'Trusted Root Certification Authorities' (Local Machine)."
-	@echo "- WSL/Linux: make cert-install-wsl"
+	@echo "OK: RSA PKI generated in ./certs/"
+	@echo " - root.crt (install THIS on Windows)"
+	@echo " - root.key (do NOT share/commit)"
+	@echo " - intermediate.crt"
+	@echo " - intermediate.key (do NOT share/commit)"
+	@echo ""
+	@echo "NEXT STEPS (once per machine):"
+	@echo "1) Windows (PowerShell as Admin):"
+	@echo "   certutil -addstore -f \"Root\" \"<PATH_TO_REPO>\\certs\\root.crt\""
+	@echo "2) (Optional) WSL/Linux trust store:"
+	@echo "   make rsa-install-wsl"
+	@echo "3) Start stack:"
+	@echo "   make up"
+	@echo "4) Test:"
+	@echo "   curl https://localhost"
 
-cert-export-check:
-	@echo "Checking root CA exists inside container..."
-	docker exec -i $(CADDY_CONTAINER) sh -lc 'test -f "$(CADDY_ROOT_CA_PATH)" && echo "OK: $(CADDY_ROOT_CA_PATH)" || (echo "ERROR: not found $(CADDY_ROOT_CA_PATH)"; exit 1)'
+rsa-test:
+	@echo "Root:"
+	@openssl x509 -in "$(RSA_ROOT_CRT)" -noout -subject -issuer -dates
+	@openssl x509 -in "$(RSA_ROOT_CRT)" -noout -text | grep -E "Public Key Algorithm|Signature Algorithm"
+	@echo ""
+	@echo "Intermediate:"
+	@openssl x509 -in "$(RSA_INT_CRT)" -noout -subject -issuer -dates
+	@openssl x509 -in "$(RSA_INT_CRT)" -noout -text | grep -E "Public Key Algorithm|Signature Algorithm"
 
-cert-install-wsl:
-	@if [ ! -f "$(CADDY_ROOT_CA_OUT)" ]; then \
-		echo "ERROR: cert not found at $(CADDY_ROOT_CA_OUT). Run: make cert-export"; \
+rsa-install-wsl:
+	@if [ ! -f "$(RSA_ROOT_CRT)" ]; then \
+		echo "ERROR: $(RSA_ROOT_CRT) not found. Run: make rsa-gen"; \
 		exit 1; \
 	fi
-	@echo "Installing root CA into Linux/WSL trust store (requires sudo)..."
-	sudo cp "$(CADDY_ROOT_CA_OUT)" /usr/local/share/ca-certificates/caddy-local-root.crt
+	@echo "Installing RSA root CA into Linux/WSL trust store (requires sudo)..."
+	sudo cp "$(RSA_ROOT_CRT)" /usr/local/share/ca-certificates/mcp-gw-local-root.crt
 	sudo update-ca-certificates
-	@echo "Done. Try: curl -i https://localhost"
+	@echo "Done. Try: curl https://localhost"
 
 # ----------------------------
 # Go build
 # ----------------------------
-build: build-linux build-windows build-shims
+build: build-linux build-windows
 
 build-linux:
 	@mkdir -p $(DIST_DIR)
 	@echo "Building $(BIN) for linux/amd64..."
-	cd $(ROUTER_DIR) && $(GO_LINUX_ENV) $(GO) build -o ../$(DIST_DIR)/$(BIN) .
+	cd $(ROUTER_DIR) && $(GO_LINUX_ENV) $(GO) build -o ../$(DIST_DIR)/$(BIN)
 
 build-windows:
 	@mkdir -p $(DIST_DIR)
-	@echo "Building $(BIN).exe for windows/amd64..."
+	@echo "Building Windows binaries (gateway + shims) for windows/amd64..."
 	cd $(ROUTER_DIR) && $(GO_WINDOWS_ENV) $(GO) build -o ../$(DIST_DIR)/$(BIN).exe .
-
-build-shims: build-shim-proc build-shim-xport
-
-build-shim-proc:
-	@mkdir -p $(DIST_DIR)
-	@echo "Building $(SHIM_PROC) for windows/amd64..."
 	cd $(ROUTER_DIR) && $(GO_WINDOWS_ENV) $(GO) build -o ../$(DIST_DIR)/$(SHIM_PROC) ./cmd/mcp-gw-shim-proc
-
-build-shim-xport:
-	@mkdir -p $(DIST_DIR)
-	@echo "Building $(SHIM_XPORT) for windows/amd64..."
 	cd $(ROUTER_DIR) && $(GO_WINDOWS_ENV) $(GO) build -o ../$(DIST_DIR)/$(SHIM_XPORT) ./cmd/mcp-gw-shim-xport
 
-install-linux: build-linux
-	@echo "Installing to /usr/local/bin/$(BIN) (requires sudo)..."
-	sudo cp "$(DIST_DIR)/$(BIN)" /usr/local/bin/$(BIN)
-	sudo chmod +x /usr/local/bin/$(BIN)
-	@echo "Installed. Verify: which $(BIN) && $(BIN) --help"
-
-uninstall-linux:
-	@echo "Removing /usr/local/bin/$(BIN) (requires sudo)..."
-	sudo rm -f /usr/local/bin/$(BIN)
-	@echo "Removed."
-
 # ----------------------------
-# Go dev helpers
+# Go helpers
 # ----------------------------
 verify: test build-linux
 	@echo "OK: test + build-linux passed"
@@ -177,4 +184,7 @@ tidy:
 	cd $(ROUTER_DIR) && $(GO) mod tidy
 
 clean:
-	rm -rf $(DIST_DIR) $(CERTS_DIR)
+	rm -rf $(DIST_DIR)
+	rm -f "$(RSA_ROOT_KEY)" "$(RSA_ROOT_CRT)" "$(RSA_INT_KEY)" "$(RSA_INT_CRT)"
+	rm -f "$(CERTS_DIR)/root.srl"
+	@echo "Clean done. certs/.keep preserved."

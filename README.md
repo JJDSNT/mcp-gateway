@@ -72,6 +72,25 @@ Workspace
 
 ---
 
+## Setup Inicial — Certificados TLS
+
+Este projeto executa com TLS (inclusive em ambiente local), portanto é necessário gerar certificados locais antes da primeira execução.
+
+**Primeira vez (uma única vez por máquina):**
+```bash
+make rsa-gen
+```
+
+**Windows — Instalação do Certificado Raiz:**
+Importe o arquivo `certs/root.crt` em **Autoridades de Certificação Raiz Confiáveis (Local Machine)**.
+
+**Após o setup, inicie o projeto:**
+```bash
+make up
+```
+
+---
+
 ## Tool Runtimes
 
 O gateway suporta dois modelos de execução:
@@ -209,73 +228,12 @@ mcp.seudominio.com {
 
 ## Quick Start
 
-```bash
-docker compose up -d
-```
+Antes de iniciar, execute o setup de certificados TLS conforme descrito na seção **Setup Inicial — Certificados TLS**.
 
-Acesso:
-
-```
-https://mcp.seudominio.com/mcp/fs
-https://mcp.seudominio.com/mcp/git
-```
-
----
-
-## Fluxo Rápido para Build, Instalação e Execução
-
-### 1. Subir o Ambiente Local (Docker + HTTPS)
+Após o setup, inicie o projeto:
 
 ```bash
 make up
-```
-
-### 2. Exportar o Certificado Raiz HTTPS do Caddy
-
-```bash
-make cert-export
-```
-
-### 3. Instalar o Certificado
-
-**Linux / WSL:**
-```bash
-make cert-install-wsl
-```
-
-**Windows:**
-Importar `certs/caddy-local-root.crt` em "Autoridades de Certificação Raiz Confiáveis (Computador Local)"
-
-### 4. Build do Binário MCP
-
-```bash
-make build
-```
-
-### 5. Instalar o Binário Globalmente (PATH)
-
-**Linux / WSL:**
-```bash
-make install-linux
-```
-
-**Windows:**
-Copiar `dist\mcp-gw.exe` para um diretório no PATH
-
-### 6. Executar (Modo MCP / stdio)
-
-```bash
-mcp-gw --config /caminho/para/config.yaml
-```
-
-### 7. Teste Rápido do Servidor
-
-Para verificar se o servidor está no ar:
-
-```bash
-curl -k -i -N https://localhost/mcp/echo \
-  -H "Content-Type: application/json" \
-  --data '{"hello":"world"}'
 ```
 
 ---
