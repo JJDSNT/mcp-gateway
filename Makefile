@@ -57,6 +57,7 @@ LDFLAGS := -s -w \
 # Phony targets
 # ----------------------------
 .PHONY: help up down rebuild ps logs \
+        tunnel-up tunnel-down \
         rsa-gen rsa-test rsa-install-wsl \
         build build-all build-linux build-windows \
         verify test fmt tidy clean clean-certs
@@ -72,6 +73,10 @@ help:
 	@echo "  down              - docker compose down"
 	@echo "  ps                - docker compose ps"
 	@echo "  logs              - docker compose logs -f"
+	@echo ""
+	@echo "Tunnel:"
+	@echo "  tunnel-up         - start Cloudflare tunnel"
+	@echo "  tunnel-down       - stop Cloudflare tunnel"
 	@echo ""
 	@echo "Certificates:"
 	@echo "  rsa-gen           - generate RSA root + intermediate"
@@ -109,6 +114,15 @@ ps:
 
 logs:
 	$(COMPOSE) logs -f
+
+# ----------------------------
+# Docker tunnel (Cloudflare)
+# ----------------------------
+tunnel-up:
+	$(COMPOSE) --profile tunnel up -d
+
+tunnel-down:
+	$(COMPOSE) stop cloudflared
 
 # ----------------------------
 # RSA PKI generation

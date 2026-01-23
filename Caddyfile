@@ -1,13 +1,3 @@
-# Caddyfile
-#
-# Reverse proxy for the MCP Gateway Lab.
-# - Routes everything under /mcp/* to the Go mcp-router
-# - Streaming-friendly (SSE)
-# - TLS always on (localhost)
-# - RSA local CA (certs/)
-# Optional: local TLS (works for localhost/LAN testing)
-# For Cloudflare Tunnel you can also run plain HTTP internally.
-
 {
   local_certs
 
@@ -27,13 +17,28 @@
   }
 }
 
+# --- TUNNEL / ngrok (aceita qualquer Host em HTTP interno) ---
+:80 {
+  @mcp path /mcp* /mcp/*
+  handle @mcp {
+    reverse_proxy mcp-router:8080 {
+      transport http {
+        versions 1.1
+      }
+      flush_interval -1
+    }
+  }
+
+  respond "MCP Gateway Lab OK\n" 200
+}
+
+# --- DEV LOCAL (TLS só para localhost) ---
 https://localhost {
   tls {
     issuer internal
   }
 
   @mcp path /mcp* /mcp/*
-
   handle @mcp {
     reverse_proxy mcp-router:8080 {
       transport http {
