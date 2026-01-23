@@ -85,5 +85,4 @@ jobs:
         with:
           version: v1.60.3
           working-directory: router
-          # seu config está na raiz (golangci.yml), então aponta explicitamente:
-          args: --timeout=5m --config=../golangci.yml
+          args: --timeout=5m
