@@ -11,12 +11,12 @@ import (
 
 // KillProcess tenta encerrar o processo de forma graciosa e, se necessário, força a morte.
 // Em Unix-like:
-//  1) SIGTERM no grupo (process tree inteira)
-//  2) espera até graceTimeout o processo morrer
-//  3) SIGKILL no grupo como fallback
+//  1. SIGTERM no grupo (process tree inteira)
+//  2. espera até graceTimeout o processo morrer
+//  3. SIGKILL no grupo como fallback
 //
 // Em Windows:
-//  - fallback para Process.Kill (não há SIGTERM/PGID da mesma forma)
+//   - fallback para Process.Kill (não há SIGTERM/PGID da mesma forma)
 func KillProcess(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return

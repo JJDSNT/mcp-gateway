@@ -15,18 +15,18 @@ func TestCommandInjection_NoShellExecution(t *testing.T) {
 	// Se fosse sh -c, os caracteres abaixo causariam problemas
 
 	dangerousArgs := []string{
-		"; echo hacked",           // command separator
-		"| cat /etc/passwd",       // pipe
-		"&& rm -rf /",             // logical AND
-		"|| echo fallback",        // logical OR
-		"$(whoami)",               // command substitution
-		"`whoami`",                // command substitution (backticks)
-		"$(cat /etc/passwd)",      // dangerous command sub
-		"& background",            // background execution
-		"> /tmp/output",           // redirect
-		"< /etc/passwd",           // input redirect
-		">> /tmp/log",             // append redirect
-		"2>&1",                    // stderr redirect
+		"; echo hacked",      // command separator
+		"| cat /etc/passwd",  // pipe
+		"&& rm -rf /",        // logical AND
+		"|| echo fallback",   // logical OR
+		"$(whoami)",          // command substitution
+		"`whoami`",           // command substitution (backticks)
+		"$(cat /etc/passwd)", // dangerous command sub
+		"& background",       // background execution
+		"> /tmp/output",      // redirect
+		"< /etc/passwd",      // input redirect
+		">> /tmp/log",        // append redirect
+		"2>&1",               // stderr redirect
 	}
 
 	for _, arg := range dangerousArgs {

@@ -163,9 +163,18 @@ func run(ctx context.Context, cfg config, log *slog.Logger) int {
 
 	case err := <-waitErr:
 		// best-effort drains
-		select { case <-copyInDone: default: }
-		select { case <-copyOutDone: default: }
-		select { case <-copyErrDone: default: }
+		select {
+		case <-copyInDone:
+		default:
+		}
+		select {
+		case <-copyOutDone:
+		default:
+		}
+		select {
+		case <-copyErrDone:
+		default:
+		}
 
 		code := exitCodeFromWait(err)
 		if err != nil {

@@ -9,9 +9,10 @@ import (
 
 // TestAuthHeadersBypassRegression verifica que nenhum header de auth pode bypassar validação
 // Este é um teste-regressão: documenta que o router NÃO deve aceitar "atalhos" como:
-//   if r.Header.Get("X-Auth") == "ok" { return }
-//   if r.Header.Get("X-Forwarded-User") == "admin" { return }
-// 
+//
+//	if r.Header.Get("X-Auth") == "ok" { return }
+//	if r.Header.Get("X-Forwarded-User") == "admin" { return }
+//
 // A regra é simples: headers não mudam o resultado da validação,
 // a menos que sejam headers realmente usados por feature (e.g., X-Forwarded-For para logging).
 func TestAuthHeadersBypassRegression(t *testing.T) {
@@ -69,10 +70,10 @@ func TestAuthHeadersBypassRegression(t *testing.T) {
 			"valid tool, garbage auth headers",
 			"valid-tool",
 			map[string]string{
-				"X-Auth":    "fake",
-				"X-User":    "fake",
-				"X-Admin":   "true",
-				"X-Bypass":  "yes",
+				"X-Auth":   "fake",
+				"X-User":   "fake",
+				"X-Admin":  "true",
+				"X-Bypass": "yes",
 			},
 			true, // Deve passar (headers ignorados)
 		},
@@ -214,7 +215,7 @@ func TestCloudflareHeadersAreNotUsedForValidation(t *testing.T) {
 			"invalid tool, CF-Visitor does NOT bypass",
 			"../../../",
 			map[string]string{
-				"CF-Visitor": `{"scheme":"https"}`,
+				"CF-Visitor":       `{"scheme":"https"}`,
 				"CF-Connecting-IP": "1.1.1.1",
 			},
 			false,

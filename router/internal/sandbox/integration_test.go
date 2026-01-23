@@ -10,7 +10,7 @@ import (
 // TestToolNameValidation_InRoute verifica que a rota rejeita tool names inválidos
 func TestToolNameValidation_InRoute(t *testing.T) {
 	tests := map[string]int{
-		"valid_tool":      http.StatusNotFound, // 404 porque tool não existe na config
+		"valid_tool":      http.StatusNotFound,   // 404 porque tool não existe na config
 		"tool/name":       http.StatusBadRequest, // inválido
 		"../tool":         http.StatusBadRequest, // inválido
 		"tool%2fname":     http.StatusBadRequest, // inválido (encoded /)
@@ -85,12 +85,12 @@ func TestAllowlistStrict_OnlyConfiguredTools(t *testing.T) {
 	defer server.Close()
 
 	tests := map[string]int{
-		"/mcp/echo":          http.StatusOK,
-		"/mcp/filesystem":    http.StatusOK,
-		"/mcp/git":           http.StatusOK,
-		"/mcp/whoami":        http.StatusNotFound, // não está na allowlist
-		"/mcp/bash":          http.StatusNotFound, // não está na allowlist
-		"/mcp/../../etc":     http.StatusBadRequest, // inválido
+		"/mcp/echo":       http.StatusOK,
+		"/mcp/filesystem": http.StatusOK,
+		"/mcp/git":        http.StatusOK,
+		"/mcp/whoami":     http.StatusNotFound,   // não está na allowlist
+		"/mcp/bash":       http.StatusNotFound,   // não está na allowlist
+		"/mcp/../../etc":  http.StatusBadRequest, // inválido
 	}
 
 	for path, expectStatus := range tests {
@@ -146,7 +146,7 @@ func TestEncodingBypass_Multiple(t *testing.T) {
 	encodings := []string{
 		"../",
 		"%2e%2e%2f",
-		"%2E%2E%2F", // uppercase
+		"%2E%2E%2F",       // uppercase
 		"%252e%252e%252f", // double
 	}
 

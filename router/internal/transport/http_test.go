@@ -41,7 +41,7 @@ func TestHTTPMethods_Hardening(t *testing.T) {
 		method       string
 		expectStatus int
 	}{
-		{http.MethodPost, 0},                        // permitido: só verificar != 405
+		{http.MethodPost, 0},                          // permitido: só verificar != 405
 		{http.MethodGet, http.StatusMethodNotAllowed}, // /mcp/<tool> é POST-only
 
 		{http.MethodPut, http.StatusMethodNotAllowed},

@@ -29,8 +29,8 @@ func (DockerRuntime) Spawn(ctx context.Context, cfg *config.Config, tool config.
 	)
 
 	// Defaults conservadores (somente para container)
-	netMode := tool.DockerNetworkEffective()  // "none" | "bridge"
-	readOnly := tool.ReadOnlyEffective()      // true/false
+	netMode := tool.DockerNetworkEffective() // "none" | "bridge"
+	readOnly := tool.ReadOnlyEffective()     // true/false
 
 	args := []string{
 		"run", "-i", "--rm",

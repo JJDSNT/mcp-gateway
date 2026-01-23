@@ -104,7 +104,7 @@ func ValidatePath(workspaceRoot, requestedPath string) (string, error) {
 		}
 
 		currentPath = filepath.Join(currentPath, part)
-		
+
 		// Checar se o componente é um symlink
 		linkTarget, err := os.Readlink(currentPath)
 		if err == nil {
@@ -117,14 +117,14 @@ func ValidatePath(workspaceRoot, requestedPath string) (string, error) {
 				linkDir := filepath.Dir(currentPath)
 				resolvedLink := filepath.Join(linkDir, linkTarget)
 				resolvedLink = filepath.Clean(resolvedLink)
-				
+
 				// Verificar se o symlink resolvido está dentro do workspace
 				// Usar separator check para evitar false positives (ex: /ws e /ws2)
 				inWorkspace := resolvedLink == wsRoot || (strings.HasPrefix(resolvedLink, wsRoot+string(filepath.Separator)))
 				if !inWorkspace {
 					return "", fmt.Errorf("symlink escapes workspace: %s -> %s", part, resolvedLink)
 				}
-				
+
 				// Validar cadeias de symlinks: se o target é também um symlink, validar recursivamente
 				// Usar EvalSymlinks no target para detectar cadeias
 				evaledTarget, errEval := filepath.EvalSymlinks(resolvedLink)
@@ -135,7 +135,7 @@ func ValidatePath(workspaceRoot, requestedPath string) (string, error) {
 						return "", fmt.Errorf("symlink chain escapes workspace: %s resolves to %s", part, evaledTarget)
 					}
 				}
-				
+
 				// Se é um symlink que escapa, precisamos checar os componentes restantes
 				// para garantir que não há path traversal através do symlink
 				remainingParts := pathParts[i+1:]

@@ -32,22 +32,22 @@ func TestValidateToolName_Valid(t *testing.T) {
 
 func TestValidateToolName_Invalid(t *testing.T) {
 	tests := map[string]string{
-		"":                "empty",
-		"tool/name":       "slash",
-		"tool\\name":      "backslash",
-		"tool name":       "space",
-		"tool\tname":      "tab",
-		"tool\nname":      "newline",
-		"../tool":         "parent dir",
-		"tool/..":         "parent dir end",
-		"tool%2fname":     "encoded slash %2f",
-		"tool%2Fname":     "encoded slash %2F",
-		"tool%5cname":     "encoded backslash %5c",
-		"tool%5Cname":     "encoded backslash %5C",
-		"tool%252fname":   "double-encoded slash",
-		"tool@name":       "special char @",
-		"tool#name":       "special char #",
-		"tool$name":       "special char $",
+		"":              "empty",
+		"tool/name":     "slash",
+		"tool\\name":    "backslash",
+		"tool name":     "space",
+		"tool\tname":    "tab",
+		"tool\nname":    "newline",
+		"../tool":       "parent dir",
+		"tool/..":       "parent dir end",
+		"tool%2fname":   "encoded slash %2f",
+		"tool%2Fname":   "encoded slash %2F",
+		"tool%5cname":   "encoded backslash %5c",
+		"tool%5Cname":   "encoded backslash %5C",
+		"tool%252fname": "double-encoded slash",
+		"tool@name":     "special char @",
+		"tool#name":     "special char #",
+		"tool$name":     "special char $",
 	}
 
 	for name, desc := range tests {
@@ -95,14 +95,14 @@ func TestValidatePath_PathTraversal(t *testing.T) {
 	tmpdir := t.TempDir()
 
 	tests := map[string]string{
-		"../etc":         "parent dir slash",
-		"..%2fetc":       "encoded parent dir %2f",
-		"..%252fetc":     "double-encoded parent dir",
-		"..\\etc":        "backslash parent dir",
-		"//etc/passwd":   "double slash",
-		"/.":             "slash dot",
-		"/etc/passwd":    "absolute path",
-		"%2e%2e%2fetc":   "encoded ../",
+		"../etc":             "parent dir slash",
+		"..%2fetc":           "encoded parent dir %2f",
+		"..%252fetc":         "double-encoded parent dir",
+		"..\\etc":            "backslash parent dir",
+		"//etc/passwd":       "double slash",
+		"/.":                 "slash dot",
+		"/etc/passwd":        "absolute path",
+		"%2e%2e%2fetc":       "encoded ../",
 		"%252e%252e%252fetc": "double-encoded ../",
 	}
 
@@ -164,12 +164,12 @@ func TestValidatePath_SymlinkToRoot(t *testing.T) {
 func isPathInWorkspace(workspace, path string) bool {
 	wsAbs := filepath.Clean(workspace)
 	pathAbs := filepath.Clean(path)
-	
+
 	// Se for igual, está dentro
 	if pathAbs == wsAbs {
 		return true
 	}
-	
+
 	// Se começar com workspace + separator, está dentro
 	return len(pathAbs) > len(wsAbs) &&
 		pathAbs[:len(wsAbs)] == wsAbs &&
