@@ -121,6 +121,7 @@ func run(ctx context.Context, cfg config, rid string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	//nolint:errcheck
 	defer resp.Body.Close()
 
 	ct := resp.Header.Get("Content-Type")
