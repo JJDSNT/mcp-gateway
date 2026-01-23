@@ -20,7 +20,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        go-version: ["1.23.x"]
+        # Sugestão: alinhe com seu go.mod depois. Por enquanto pode deixar 1.18.x se quiser.
+        go-version: ["1.22.x"]
 
     steps:
       - name: Checkout
@@ -31,30 +32,37 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
+          cache-dependency-path: router/go.sum
 
       - name: Go env
+        working-directory: router
         run: |
           go version
           go env
 
       - name: Tidy check
+        working-directory: router
         run: |
           go mod tidy
           git diff --exit-code
 
       - name: Format check
+        working-directory: router
         run: |
           test -z "$(gofmt -l .)"
 
       - name: Vet
+        working-directory: router
         run: |
           go vet ./...
 
       - name: Test
+        working-directory: router
         run: |
           go test -race ./...
 
       - name: Build
+        working-directory: router
         run: |
           go build ./cmd/mcp-gw
 
@@ -68,11 +76,14 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: "1.22.x"
           cache: true
+          cache-dependency-path: router/go.sum
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.60.3
-          args: --timeout=5m
+          working-directory: router
+          # seu config está na raiz (golangci.yml), então aponta explicitamente:
+          args: --timeout=5m --config=../golangci.yml
