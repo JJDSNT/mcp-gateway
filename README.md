@@ -82,7 +82,28 @@ make rsa-gen
 ```
 
 **Windows — Instalação do Certificado Raiz:**
-Importe o arquivo `certs/root.crt` em **Autoridades de Certificação Raiz Confiáveis (Local Machine)**.
+
+A instalação do certificado raiz requer privilégios administrativos, pois o certificado precisa ser instalado no repositório **Trusted Root Certification Authorities (Local Machine)**.
+
+Abra o **PowerShell como Administrador** e execute:
+
+```powershell
+certutil -addstore -f "Root" "<caminho>\certs\root.crt"
+```
+
+Substituir `<caminho>` pelo caminho absoluto ou relativo até o repositório, ex: `C:\Users\seu-usuario\Projects\mcp-gateway\certs\root.crt`
+
+**Validar a instalação:**
+
+Execute no PowerShell para confirmar que o certificado foi instalado corretamente:
+
+```powershell
+certutil -store Root | findstr /i "MCP Caddy"
+```
+
+Se o comando retornar `MCP Caddy Local Authority RSA Root`, a instalação foi bem-sucedida. Caso contrário, verifique o caminho do arquivo e repita o comando `certutil -addstore`.
+
+**Nota:** Após instalar o certificado, feche e reabra o navegador para que o trust seja aplicado.
 
 **Após o setup, inicie o projeto:**
 ```bash

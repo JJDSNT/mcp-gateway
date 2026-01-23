@@ -27,7 +27,7 @@
   }
 }
 
-localhost {
+https://localhost {
   tls {
     issuer internal
   }
