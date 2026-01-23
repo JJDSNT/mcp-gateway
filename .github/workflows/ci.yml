@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-    enforce-dev-to-main:
+  enforce-dev-to-main:
     name: Enforce dev → main
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     runs-on: ubuntu-latest
@@ -37,7 +37,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        # Sugestão: alinhe com seu go.mod depois. Por enquanto pode deixar 1.18.x se quiser.
         go-version: ["1.22.x"]
 
     steps:
